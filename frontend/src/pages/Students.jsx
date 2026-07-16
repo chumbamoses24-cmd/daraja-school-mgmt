@@ -1,0 +1,271 @@
+import { useEffect, useState } from "react";
+import client from "../api/client";
+import { useAuth } from "../context/AuthContext.jsx";
+
+const emptyForm = {
+  admissionNo: "",
+  firstName: "",
+  lastName: "",
+  dob: "",
+  gender: "Male",
+  classRoomId: "",
+  guardianName: "",
+  guardianPhone: "",
+  guardianEmail: "",
+};
+const emptyClassForm = { name: "", level: "", teacherId: "" };
+
+export default function Students() {
+  const { user } = useAuth();
+  const [students, setStudents] = useState([]);
+  const [classRooms, setClassRooms] = useState([]);
+  const [teachers, setTeachers] = useState([]);
+  const [form, setForm] = useState(emptyForm);
+  const [showForm, setShowForm] = useState(false);
+  const [error, setError] = useState("");
+
+  const [classForm, setClassForm] = useState(emptyClassForm);
+  const [showClassForm, setShowClassForm] = useState(false);
+  const [classError, setClassError] = useState("");
+
+  function load() {
+    client.get("/students").then((r) => setStudents(r.data));
+    client.get("/students/classrooms").then((r) => setClassRooms(r.data));
+    if (user.role === "ADMIN") {
+      client.get("/auth/users?role=TEACHER").then((r) => setTeachers(r.data)).catch(() => {});
+    }
+  }
+  useEffect(load, []);
+
+  async function handleAddClass(e) {
+    e.preventDefault();
+    setClassError("");
+    try {
+      await client.post("/students/classrooms", {
+        name: classForm.name,
+        level: classForm.level,
+        teacherId: classForm.teacherId ? Number(classForm.teacherId) : undefined,
+      });
+      setClassForm(emptyClassForm);
+      setShowClassForm(false);
+      load();
+    } catch (err) {
+      setClassError(err.response?.data?.error?.formErrors?.join(", ") || "Could not create class");
+    }
+  }
+
+  async function handleDeleteClass(classRoom) {
+    if (!window.confirm(`Delete "${classRoom.name}"? Its students will be kept but unassigned from any class.`)) return;
+    try {
+      await client.delete(`/students/classrooms/${classRoom.id}`);
+      load();
+    } catch (err) {
+      alert(err.response?.data?.error || "Could not delete class");
+    }
+  }
+
+  async function handleDeleteStudent(student) {
+    if (!window.confirm(`Delete ${student.firstName} ${student.lastName}? This removes their attendance, grades, and fee records too. This cannot be undone.`)) return;
+    try {
+      await client.delete(`/students/${student.id}`);
+      load();
+    } catch (err) {
+      alert(err.response?.data?.error || "Could not delete student");
+    }
+  }
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setError("");
+    try {
+      await client.post("/students", { ...form, classRoomId: form.classRoomId ? Number(form.classRoomId) : undefined });
+      setForm(emptyForm);
+      setShowForm(false);
+      load();
+    } catch (err) {
+      setError(err.response?.data?.error?.formErrors?.join(", ") || "Could not add student");
+    }
+  }
+
+  return (
+    <div>
+      {user.role === "ADMIN" && (
+        <div className="mb-8">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="font-display text-lg font-semibold">Classes</h3>
+            <button className="btn-secondary text-sm" onClick={() => setShowClassForm((v) => !v)}>
+              {showClassForm ? "Cancel" : "+ New class"}
+            </button>
+          </div>
+
+          {showClassForm && (
+            <form onSubmit={handleAddClass} className="card p-6 mb-4 grid grid-cols-3 gap-4">
+              <div>
+                <label className="block text-sm font-medium mb-1">Class name</label>
+                <input
+                  className="input"
+                  required
+                  placeholder="e.g. Grade 8 Green"
+                  value={classForm.name}
+                  onChange={(e) => setClassForm({ ...classForm, name: e.target.value })}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1">Level</label>
+                <input
+                  className="input"
+                  required
+                  placeholder="e.g. Grade 8"
+                  value={classForm.level}
+                  onChange={(e) => setClassForm({ ...classForm, level: e.target.value })}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1">Homeroom teacher</label>
+                <select
+                  className="input"
+                  value={classForm.teacherId}
+                  onChange={(e) => setClassForm({ ...classForm, teacherId: e.target.value })}
+                >
+                  <option value="">Unassigned</option>
+                  {teachers.map((t) => (
+                    <option key={t.id} value={t.id}>{t.firstName} {t.lastName}</option>
+                  ))}
+                </select>
+              </div>
+              {classError && <p className="text-rust text-sm col-span-3">{classError}</p>}
+              <button className="btn-primary col-span-3" type="submit">Save class</button>
+            </form>
+          )}
+
+          <div className="flex flex-wrap gap-2">
+            {classRooms.map((c) => (
+              <span key={c.id} className="pill border border-line bg-white flex items-center gap-2">
+                {c.name} <span className="text-slate/40">· {c._count?.students ?? 0} students</span>
+                <button className="text-rust hover:underline" onClick={() => handleDeleteClass(c)} title="Delete class">
+                  ×
+                </button>
+              </span>
+            ))}
+            {classRooms.length === 0 && <p className="text-slate/50 text-sm">No classes yet — add one above.</p>}
+          </div>
+        </div>
+      )}
+
+      <div className="flex items-center justify-between mb-6">
+        <h2 className="text-2xl font-display font-semibold">{user.role === "PARENT" ? "My Children" : "Students & Admissions"}</h2>
+        {user.role === "ADMIN" && (
+          <button className="btn-primary" onClick={() => setShowForm((v) => !v)}>
+            {showForm ? "Cancel" : "+ New admission"}
+          </button>
+        )}
+      </div>
+
+      {showForm && (
+        <form onSubmit={handleSubmit} className="card p-6 mb-6 grid grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm font-medium mb-1">Admission No.</label>
+            <input className="input" required value={form.admissionNo} onChange={(e) => setForm({ ...form, admissionNo: e.target.value })} />
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">Class</label>
+            <select className="input" value={form.classRoomId} onChange={(e) => setForm({ ...form, classRoomId: e.target.value })}>
+              <option value="">Unassigned</option>
+              {classRooms.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">First name</label>
+            <input className="input" required value={form.firstName} onChange={(e) => setForm({ ...form, firstName: e.target.value })} />
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">Last name</label>
+            <input className="input" required value={form.lastName} onChange={(e) => setForm({ ...form, lastName: e.target.value })} />
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">Date of birth</label>
+            <input className="input" type="date" required value={form.dob} onChange={(e) => setForm({ ...form, dob: e.target.value })} />
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">Gender</label>
+            <select className="input" value={form.gender} onChange={(e) => setForm({ ...form, gender: e.target.value })}>
+              <option>Male</option>
+              <option>Female</option>
+            </select>
+          </div>
+          <div className="col-span-2 pt-2 border-t border-line">
+            <p className="text-xs uppercase tracking-wider text-slate/50 font-mono mb-3">Guardian contact (optional)</p>
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">Guardian name</label>
+            <input
+              className="input"
+              placeholder="e.g. Peter Kamau"
+              value={form.guardianName}
+              onChange={(e) => setForm({ ...form, guardianName: e.target.value })}
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">Guardian phone</label>
+            <input
+              className="input"
+              placeholder="0712345678"
+              value={form.guardianPhone}
+              onChange={(e) => setForm({ ...form, guardianPhone: e.target.value })}
+            />
+          </div>
+          <div className="col-span-2">
+            <label className="block text-sm font-medium mb-1">Guardian email</label>
+            <input
+              className="input"
+              type="email"
+              placeholder="parent@example.com"
+              value={form.guardianEmail}
+              onChange={(e) => setForm({ ...form, guardianEmail: e.target.value })}
+            />
+          </div>
+          {error && <p className="text-rust text-sm col-span-2">{error}</p>}
+          <button className="btn-primary col-span-2" type="submit">Save student</button>
+        </form>
+      )}
+
+      <div className="card overflow-hidden">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-left text-slate/50 uppercase text-xs tracking-wider border-b border-line bg-line/20">
+              <th className="py-3 px-4 font-mono">Adm. No</th>
+              <th className="py-3 px-4">Name</th>
+              <th className="py-3 px-4">Class</th>
+              <th className="py-3 px-4">Gender</th>
+              <th className="py-3 px-4">Guardian</th>
+              <th className="py-3 px-4">Guardian phone</th>
+              {user.role === "ADMIN" && <th className="py-3 px-4"></th>}
+            </tr>
+          </thead>
+          <tbody>
+            {students.map((s) => (
+              <tr key={s.id} className="border-b border-line/60 hover:bg-line/10">
+                <td className="py-3 px-4 font-mono text-xs text-slate/60">{s.admissionNo}</td>
+                <td className="py-3 px-4 font-medium">{s.firstName} {s.lastName}</td>
+                <td className="py-3 px-4">{s.classRoom?.name || "—"}</td>
+                <td className="py-3 px-4">{s.gender}</td>
+                <td className="py-3 px-4">{s.guardianName || (s.parent ? `${s.parent.firstName} ${s.parent.lastName}` : "—")}</td>
+                <td className="py-3 px-4">{s.guardianPhone || s.parent?.phone || "—"}</td>
+                {user.role === "ADMIN" && (
+                  <td className="py-3 px-4">
+                    <button className="text-xs text-rust underline underline-offset-2" onClick={() => handleDeleteStudent(s)}>
+                      Delete
+                    </button>
+                  </td>
+                )}
+              </tr>
+            ))}
+            {students.length === 0 && (
+              <tr><td colSpan={user.role === "ADMIN" ? 7 : 6} className="py-6 text-center text-slate/50">No students found.</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}

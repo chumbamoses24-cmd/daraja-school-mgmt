@@ -1,0 +1,201 @@
+// Prisma schema for the school management system
+// Run `npx prisma migrate dev --name init` after installing dependencies
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Role: "ADMIN" | "TEACHER" | "PARENT"
+// AttendanceStatus: "PRESENT" | "ABSENT" | "LATE" | "EXCUSED"
+// InvoiceStatus: "UNPAID" | "PARTIAL" | "PAID"
+// (Plain strings are used instead of Prisma enums because SQLite doesn't support native enum types.
+//  Validation of these values is handled in the API routes via zod.)
+
+// Single-row table holding school-wide settings (school name, etc.)
+model SchoolSettings {
+  id         Int    @id @default(autoincrement())
+  schoolName String @default("My School")
+}
+
+model User {
+  id                 Int           @id @default(autoincrement())
+  email              String        @unique
+  password           String
+  role               String
+  firstName          String
+  lastName           String
+  phone              String?
+  mustChangePassword Boolean       @default(false)
+  createdAt          DateTime      @default(now())
+
+  // Teacher-specific relations
+  homeroomOf     ClassRoom[]   @relation("HomeroomTeacher")
+  teaches        ClassSubject[]
+  timetableSlots TimetableSlot[]
+  attendanceMarks Attendance[] @relation("MarkedBy")
+
+  // Parent-specific relations
+  children       Student[]     @relation("ParentOf")
+
+  sentMessages     Message[]   @relation("Sender")
+  receivedMessages Message[]   @relation("Recipient")
+}
+
+model ClassRoom {
+  id            Int             @id @default(autoincrement())
+  name          String          // e.g. "Grade 7 Blue"
+  level         String          // e.g. "Grade 7"
+  teacherId     Int?
+  teacher       User?           @relation("HomeroomTeacher", fields: [teacherId], references: [id])
+  students      Student[]
+  classSubjects ClassSubject[]
+  exams         Exam[]
+  feeStructures FeeStructure[]
+  timetableSlots TimetableSlot[]
+}
+
+model Student {
+  id            Int           @id @default(autoincrement())
+  admissionNo   String        @unique
+  firstName     String
+  lastName      String
+  dob           DateTime
+  gender        String
+  classRoomId   Int?
+  classRoom     ClassRoom?    @relation(fields: [classRoomId], references: [id])
+
+  // Guardian contact info kept directly on the student record — no user account required.
+  guardianName  String?
+  guardianPhone String?
+  guardianEmail String?
+
+  // Optional link to an actual parent-portal login (kept separate; only used if a parent account exists).
+  parentId      Int?
+  parent        User?         @relation("ParentOf", fields: [parentId], references: [id])
+  createdAt     DateTime      @default(now())
+
+  attendance    Attendance[]
+  grades        Grade[]
+  invoices      Invoice[]
+}
+
+model Subject {
+  id            Int             @id @default(autoincrement())
+  name          String
+  code          String          @unique
+  classSubjects ClassSubject[]
+  grades        Grade[]
+}
+
+// Join model: which teacher teaches which subject to which class
+model ClassSubject {
+  id          Int       @id @default(autoincrement())
+  classRoomId Int
+  classRoom   ClassRoom @relation(fields: [classRoomId], references: [id])
+  subjectId   Int
+  subject     Subject   @relation(fields: [subjectId], references: [id])
+  teacherId   Int
+  teacher     User      @relation(fields: [teacherId], references: [id])
+
+  @@unique([classRoomId, subjectId])
+}
+
+model Attendance {
+  id           Int              @id @default(autoincrement())
+  studentId    Int
+  student      Student          @relation(fields: [studentId], references: [id])
+  date         DateTime
+  status       String
+  markedById   Int?
+  markedBy     User?            @relation("MarkedBy", fields: [markedById], references: [id])
+
+  @@unique([studentId, date])
+}
+
+model Exam {
+  id          Int       @id @default(autoincrement())
+  name        String    // e.g. "Mid Term"
+  term        Int       // 1, 2, 3
+  year        Int
+  classRoomId Int
+  classRoom   ClassRoom @relation(fields: [classRoomId], references: [id])
+  grades      Grade[]
+}
+
+model Grade {
+  id        Int     @id @default(autoincrement())
+  examId    Int
+  exam      Exam    @relation(fields: [examId], references: [id])
+  studentId Int
+  student   Student @relation(fields: [studentId], references: [id])
+  subjectId Int
+  subject   Subject @relation(fields: [subjectId], references: [id])
+  score     Float
+  maxScore  Float   @default(100)
+  remarks   String?
+
+  @@unique([examId, studentId, subjectId])
+}
+
+model FeeStructure {
+  id          Int       @id @default(autoincrement())
+  classRoomId Int
+  classRoom   ClassRoom @relation(fields: [classRoomId], references: [id])
+  term        Int
+  year        Int
+  amount      Float
+  description String?
+}
+
+model Invoice {
+  id          Int           @id @default(autoincrement())
+  studentId   Int
+  student     Student       @relation(fields: [studentId], references: [id])
+  term        Int
+  year        Int
+  amountDue   Float
+  amountPaid  Float         @default(0)
+  status      String        @default("UNPAID")
+  payments    Payment[]
+  createdAt   DateTime      @default(now())
+}
+
+model Payment {
+  id        Int      @id @default(autoincrement())
+  invoiceId Int
+  invoice   Invoice  @relation(fields: [invoiceId], references: [id])
+  amount    Float
+  method    String   // e.g. "M-Pesa", "Bank", "Cash"
+  reference String?
+  paidAt    DateTime @default(now())
+}
+
+model TimetableSlot {
+  id          Int       @id @default(autoincrement())
+  classRoomId Int
+  classRoom   ClassRoom @relation(fields: [classRoomId], references: [id])
+  subjectId   Int?
+  teacherId   Int?
+  teacher     User?     @relation(fields: [teacherId], references: [id])
+  dayOfWeek   Int       // 1=Mon .. 5=Fri
+  startTime   String    // "08:00"
+  endTime     String    // "08:40"
+  label       String?   // e.g. "Break", "Games" for non-subject slots
+}
+
+model Message {
+  id          Int       @id @default(autoincrement())
+  senderId    Int
+  sender      User      @relation("Sender", fields: [senderId], references: [id])
+  recipientId Int
+  recipient   User      @relation("Recipient", fields: [recipientId], references: [id])
+  subject     String
+  body        String
+  sentAt      DateTime  @default(now())
+  readAt      DateTime?
+}
