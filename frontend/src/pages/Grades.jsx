@@ -25,11 +25,12 @@ export default function Grades() {
   const [reportCard, setReportCard] = useState(null);
 
   const [showExamForm, setShowExamForm] = useState(false);
-  const [examForm, setExamForm] = useState({ name: "", term: "1", year: String(new Date().getFullYear()) });
+  const [examForm, setExamForm] = useState({ name: "", term: "1", year: String(new Date().getFullYear()), classRoomIds: [] });
   const [examError, setExamError] = useState("");
 
   const [showSubjectForm, setShowSubjectForm] = useState(false);
   const [subjectForm, setSubjectForm] = useState({ name: "", code: "" });
+  const [editingSubjectId, setEditingSubjectId] = useState(null);
   const [subjectError, setSubjectError] = useState("");
 
   const [showAssignForm, setShowAssignForm] = useState(false);
@@ -71,13 +72,24 @@ export default function Grades() {
     e.preventDefault();
     setSubjectError("");
     try {
-      await client.post("/grades/subjects", subjectForm);
+      if (editingSubjectId) {
+        await client.put(`/grades/subjects/${editingSubjectId}`, subjectForm);
+      } else {
+        await client.post("/grades/subjects", subjectForm);
+      }
       setSubjectForm({ name: "", code: "" });
+      setEditingSubjectId(null);
       setShowSubjectForm(false);
       refreshSubjects();
     } catch (err) {
-      setSubjectError(err.response?.data?.error?.formErrors?.join(", ") || "Could not create subject");
+      setSubjectError(err.response?.data?.error?.formErrors?.join(", ") || "Could not save subject");
     }
+  }
+
+  function handleEditSubject(subject) {
+    setEditingSubjectId(subject.id);
+    setSubjectForm({ name: subject.name, code: subject.code });
+    setShowSubjectForm(true);
   }
 
   async function handleAssignTeacher(e) {
@@ -108,20 +120,37 @@ export default function Grades() {
     ? subjects
     : subjects.filter((s) => classSubjects.some((cs) => cs.subject.id === s.id && cs.teacher.id === user.id));
 
+  function toggleExamClass(id) {
+    setExamForm((f) => ({
+      ...f,
+      classRoomIds: f.classRoomIds.includes(id) ? f.classRoomIds.filter((c) => c !== id) : [...f.classRoomIds, id],
+    }));
+  }
+
   async function handleCreateExam(e) {
     e.preventDefault();
     setExamError("");
+    if (examForm.classRoomIds.length === 0) {
+      setExamError("Select at least one class to sit this exam");
+      return;
+    }
     try {
-      const { data } = await client.post("/grades/exams", {
-        name: examForm.name,
-        term: Number(examForm.term),
-        year: Number(examForm.year),
-        classRoomId: Number(classRoomId),
-      });
-      setExamForm({ name: "", term: "1", year: String(new Date().getFullYear()) });
+      const created = await Promise.all(
+        examForm.classRoomIds.map((crId) =>
+          client.post("/grades/exams", {
+            name: examForm.name,
+            term: Number(examForm.term),
+            year: Number(examForm.year),
+            classRoomId: Number(crId),
+          })
+        )
+      );
+      setExamForm({ name: "", term: "1", year: String(new Date().getFullYear()), classRoomIds: [] });
       setShowExamForm(false);
       refreshExams();
-      setExamId(String(data.id));
+      // Select the exam that was created for the class currently being viewed, if any
+      const matching = created.find((r) => String(r.data.classRoomId) === classRoomId);
+      if (matching) setExamId(String(matching.data.id));
     } catch (err) {
       setExamError(err.response?.data?.error?.formErrors?.join(", ") || "Could not create exam");
     }
@@ -165,12 +194,26 @@ export default function Grades() {
 
           <div className="flex items-center justify-between mb-3">
             <h3 className="font-display text-lg font-semibold">Subjects</h3>
-            <button className="btn-secondary text-sm" onClick={() => setShowSubjectForm((v) => !v)}>
+            <button
+              className="btn-secondary text-sm"
+              onClick={() => {
+                if (showSubjectForm) {
+                  setShowSubjectForm(false);
+                  setEditingSubjectId(null);
+                  setSubjectForm({ name: "", code: "" });
+                } else {
+                  setShowSubjectForm(true);
+                }
+              }}
+            >
               {showSubjectForm ? "Cancel" : "+ New subject"}
             </button>
           </div>
           {showSubjectForm && (
             <form onSubmit={handleCreateSubject} className="card p-4 mb-4 flex gap-3 items-end">
+              {editingSubjectId && (
+                <p className="text-xs uppercase tracking-wider text-slate/50 font-mono self-center">Editing</p>
+              )}
               <div>
                 <label className="block text-xs font-medium mb-1">Subject name</label>
                 <input
@@ -191,13 +234,15 @@ export default function Grades() {
                   onChange={(e) => setSubjectForm({ ...subjectForm, code: e.target.value })}
                 />
               </div>
-              <button className="btn-primary" type="submit">Save subject</button>
+              <button className="btn-primary" type="submit">{editingSubjectId ? "Save changes" : "Save subject"}</button>
               {subjectError && <p className="text-rust text-sm">{subjectError}</p>}
             </form>
           )}
           <div className="flex flex-wrap gap-2 mb-8">
             {subjects.map((s) => (
-              <span key={s.id} className="pill border border-line bg-white">{s.name} <span className="text-slate/40">· {s.code}</span></span>
+              <button key={s.id} className="pill border border-line bg-white hover:border-ink" onClick={() => handleEditSubject(s)} title="Click to edit">
+                {s.name} <span className="text-slate/40">· {s.code}</span>
+              </button>
             ))}
             {subjects.length === 0 && <p className="text-slate/50 text-sm">No subjects yet — add one above.</p>}
           </div>
@@ -288,7 +333,17 @@ export default function Grades() {
               <option value="">Select subject</option>
               {availableSubjects.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
             </select>
-            <button className="btn-secondary whitespace-nowrap" onClick={() => setShowExamForm((v) => !v)}>
+            <button
+              className="btn-secondary whitespace-nowrap"
+              onClick={() => {
+                if (showExamForm) {
+                  setShowExamForm(false);
+                } else {
+                  setExamForm((f) => ({ ...f, classRoomIds: classRoomId ? [Number(classRoomId)] : [] }));
+                  setShowExamForm(true);
+                }
+              }}
+            >
               {showExamForm ? "Cancel" : "+ New exam"}
             </button>
           </div>
@@ -297,37 +352,60 @@ export default function Grades() {
           )}
 
           {showExamForm && (
-            <form onSubmit={handleCreateExam} className="card p-4 mb-4 flex gap-3 items-end">
-              <div>
-                <label className="block text-xs font-medium mb-1">Exam name</label>
-                <input
-                  className="input"
-                  required
-                  placeholder="e.g. End Term Exam"
-                  value={examForm.name}
-                  onChange={(e) => setExamForm({ ...examForm, name: e.target.value })}
-                />
+            <form onSubmit={handleCreateExam} className="card p-4 mb-4">
+              <div className="flex gap-3 items-end flex-wrap mb-4">
+                <div>
+                  <label className="block text-xs font-medium mb-1">Exam name</label>
+                  <input
+                    className="input"
+                    required
+                    placeholder="e.g. End Term Exam"
+                    value={examForm.name}
+                    onChange={(e) => setExamForm({ ...examForm, name: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium mb-1">Term</label>
+                  <select className="input" value={examForm.term} onChange={(e) => setExamForm({ ...examForm, term: e.target.value })}>
+                    <option value="1">Term 1</option>
+                    <option value="2">Term 2</option>
+                    <option value="3">Term 3</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium mb-1">Year</label>
+                  <input
+                    className="input w-24"
+                    type="number"
+                    required
+                    value={examForm.year}
+                    onChange={(e) => setExamForm({ ...examForm, year: e.target.value })}
+                  />
+                </div>
               </div>
-              <div>
-                <label className="block text-xs font-medium mb-1">Term</label>
-                <select className="input" value={examForm.term} onChange={(e) => setExamForm({ ...examForm, term: e.target.value })}>
-                  <option value="1">Term 1</option>
-                  <option value="2">Term 2</option>
-                  <option value="3">Term 3</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-xs font-medium mb-1">Year</label>
-                <input
-                  className="input w-24"
-                  type="number"
-                  required
-                  value={examForm.year}
-                  onChange={(e) => setExamForm({ ...examForm, year: e.target.value })}
-                />
+              <div className="mb-4">
+                <label className="block text-xs font-medium mb-2">Which classes are sitting this exam? *</label>
+                <div className="flex flex-wrap gap-2">
+                  {classRooms.map((c) => (
+                    <label
+                      key={c.id}
+                      className={`pill border cursor-pointer select-none ${
+                        examForm.classRoomIds.includes(c.id) ? "border-ink bg-ink text-paper" : "border-line bg-white text-slate/70"
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        className="hidden"
+                        checked={examForm.classRoomIds.includes(c.id)}
+                        onChange={() => toggleExamClass(c.id)}
+                      />
+                      {c.name}
+                    </label>
+                  ))}
+                </div>
               </div>
               <button className="btn-primary" type="submit">Create exam</button>
-              {examError && <p className="text-rust text-sm">{examError}</p>}
+              {examError && <p className="text-rust text-sm mt-2">{examError}</p>}
             </form>
           )}
 

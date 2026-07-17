@@ -65,6 +65,14 @@ router.post("/subjects", requireRole("ADMIN"), async (req, res) => {
   res.status(201).json(await prisma.subject.create({ data: parsed.data }));
 });
 
+router.put("/subjects/:id", requireRole("ADMIN"), async (req, res) => {
+  const schema = z.object({ name: z.string().min(1).optional(), code: z.string().min(1).optional() });
+  const parsed = schema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  const subject = await prisma.subject.update({ where: { id: Number(req.params.id) }, data: parsed.data });
+  res.json(subject);
+});
+
 // ---- Subject assignments (which teacher teaches which subject in which class) ----
 router.get("/class-subjects", async (req, res) => {
   const { classRoomId, teacherId } = req.query;

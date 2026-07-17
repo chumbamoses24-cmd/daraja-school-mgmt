@@ -269,47 +269,67 @@ export default function Students() {
         </form>
       )}
 
-      <div className="card overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="text-left text-slate/50 uppercase text-xs tracking-wider border-b border-line bg-line/20">
-              <th className="py-3 px-4 font-mono">Adm. No</th>
-              <th className="py-3 px-4">Name</th>
-              <th className="py-3 px-4">Class</th>
-              <th className="py-3 px-4">Gender</th>
-              <th className="py-3 px-4">Guardian</th>
-              <th className="py-3 px-4">Guardian phone</th>
-              {user.role === "ADMIN" && <th className="py-3 px-4"></th>}
-            </tr>
-          </thead>
-          <tbody>
-            {students.map((s) => (
-              <tr key={s.id} className="border-b border-line/60 hover:bg-line/10">
-                <td className="py-3 px-4 font-mono text-xs text-slate/60">{s.admissionNo}</td>
-                <td className="py-3 px-4 font-medium">
-                  <Link to={`/students/${s.id}`} className="hover:underline text-ink">
-                    {s.firstName} {s.lastName}
-                  </Link>
-                </td>
-                <td className="py-3 px-4">{s.classRoom?.name || "—"}</td>
-                <td className="py-3 px-4">{s.gender}</td>
-                <td className="py-3 px-4">{s.guardianName || (s.parent ? `${s.parent.firstName} ${s.parent.lastName}` : "—")}</td>
-                <td className="py-3 px-4">{s.guardianPhone || s.parent?.phone || "—"}</td>
-                {user.role === "ADMIN" && (
-                  <td className="py-3 px-4">
-                    <button className="text-xs text-rust underline underline-offset-2" onClick={() => handleDeleteStudent(s)}>
-                      Delete
-                    </button>
-                  </td>
-                )}
-              </tr>
-            ))}
-            {students.length === 0 && (
-              <tr><td colSpan={user.role === "ADMIN" ? 7 : 6} className="py-6 text-center text-slate/50">No students found.</td></tr>
-            )}
-          </tbody>
-        </table>
-      </div>
+      {(() => {
+        const groups = {};
+        students.forEach((s) => {
+          const key = s.classRoom?.name || "Unassigned";
+          if (!groups[key]) groups[key] = [];
+          groups[key].push(s);
+        });
+        const groupNames = Object.keys(groups).sort((a, b) => {
+          if (a === "Unassigned") return 1;
+          if (b === "Unassigned") return -1;
+          return a.localeCompare(b);
+        });
+
+        if (students.length === 0) {
+          return <p className="text-slate/50 text-center py-10">No students found.</p>;
+        }
+
+        return groupNames.map((groupName) => (
+          <div key={groupName} className="mb-8">
+            <h3 className="font-display text-lg font-semibold mb-3">
+              {groupName} <span className="text-slate/40 text-sm font-body font-normal">· {groups[groupName].length} students</span>
+            </h3>
+            <div className="card overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-left text-slate/50 uppercase text-xs tracking-wider border-b border-line bg-line/20">
+                    <th className="py-3 px-4 font-mono">Adm. No</th>
+                    <th className="py-3 px-4">Name</th>
+                    <th className="py-3 px-4">Gender</th>
+                    <th className="py-3 px-4">Guardian</th>
+                    <th className="py-3 px-4">Guardian phone</th>
+                    {user.role === "ADMIN" && <th className="py-3 px-4"></th>}
+                  </tr>
+                </thead>
+                <tbody>
+                  {groups[groupName].map((s) => (
+                    <tr key={s.id} className="border-b border-line/60 hover:bg-line/10">
+                      <td className="py-3 px-4 font-mono text-xs text-slate/60">{s.admissionNo}</td>
+                      <td className="py-3 px-4 font-medium">
+                        <Link to={`/students/${s.id}`} className="hover:underline text-ink">
+                          {s.firstName} {s.lastName}
+                        </Link>
+                      </td>
+                      <td className="py-3 px-4">{s.gender || "—"}</td>
+                      <td className="py-3 px-4">{s.guardianName || (s.parent ? `${s.parent.firstName} ${s.parent.lastName}` : "—")}</td>
+                      <td className="py-3 px-4">{s.guardianPhone || s.parent?.phone || "—"}</td>
+                      {user.role === "ADMIN" && (
+                        <td className="py-3 px-4">
+                          <button className="text-xs text-rust underline underline-offset-2" onClick={() => handleDeleteStudent(s)}>
+                            Delete
+                          </button>
+                        </td>
+                      )}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ));
+      })()}
     </div>
   );
 }
