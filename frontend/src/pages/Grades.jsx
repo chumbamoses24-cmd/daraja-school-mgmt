@@ -27,6 +27,9 @@ export default function Grades() {
   const [showExamForm, setShowExamForm] = useState(false);
   const [examForm, setExamForm] = useState({ name: "", term: "1", year: String(new Date().getFullYear()), classRoomIds: [] });
   const [examError, setExamError] = useState("");
+  const [editingExamId, setEditingExamId] = useState(null);
+  const [examEditForm, setExamEditForm] = useState({ name: "", term: "1", year: "" });
+  const [examEditError, setExamEditError] = useState("");
 
   const [showSubjectForm, setShowSubjectForm] = useState(false);
   const [subjectForm, setSubjectForm] = useState({ name: "", code: "" });
@@ -115,10 +118,13 @@ export default function Grades() {
     refreshClassSubjects();
   }
 
-  // Teachers only see subjects they're assigned to teach for the selected class.
-  const availableSubjects = isAdmin
-    ? subjects
-    : subjects.filter((s) => classSubjects.some((cs) => cs.subject.id === s.id && cs.teacher.id === user.id));
+  // Teachers see all subjects for a class they're the homeroom teacher of; otherwise only their assigned subjects.
+  const currentClass = classRooms.find((c) => String(c.id) === classRoomId);
+  const isHomeroomTeacher = currentClass?.teacher?.id === user.id;
+  const availableSubjects =
+    isAdmin || isHomeroomTeacher
+      ? subjects
+      : subjects.filter((s) => classSubjects.some((cs) => cs.subject.id === s.id && cs.teacher.id === user.id));
 
   function toggleExamClass(id) {
     setExamForm((f) => ({
@@ -153,6 +159,28 @@ export default function Grades() {
       if (matching) setExamId(String(matching.data.id));
     } catch (err) {
       setExamError(err.response?.data?.error?.formErrors?.join(", ") || "Could not create exam");
+    }
+  }
+
+  function handleEditExam(exam) {
+    setEditingExamId(exam.id);
+    setExamEditForm({ name: exam.name, term: String(exam.term), year: String(exam.year) });
+    setExamEditError("");
+  }
+
+  async function handleSaveExamEdit(e) {
+    e.preventDefault();
+    setExamEditError("");
+    try {
+      await client.put(`/grades/exams/${editingExamId}`, {
+        name: examEditForm.name,
+        term: Number(examEditForm.term),
+        year: Number(examEditForm.year),
+      });
+      setEditingExamId(null);
+      refreshExams();
+    } catch (err) {
+      setExamEditError(err.response?.data?.error?.formErrors?.join(", ") || "Could not save changes");
     }
   }
 
@@ -408,6 +436,66 @@ export default function Grades() {
               {examError && <p className="text-rust text-sm mt-2">{examError}</p>}
             </form>
           )}
+
+          <div className="card overflow-x-auto mb-6">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-slate/50 uppercase text-xs tracking-wider border-b border-line bg-line/20">
+                  <th className="py-2 px-4">Exam</th>
+                  <th className="py-2 px-4">Term</th>
+                  <th className="py-2 px-4">Year</th>
+                  {isAdmin && <th className="py-2 px-4"></th>}
+                </tr>
+              </thead>
+              <tbody>
+                {exams.map((ex) =>
+                  editingExamId === ex.id ? (
+                    <tr key={ex.id} className="border-b border-line/60 bg-line/10">
+                      <td colSpan={isAdmin ? 4 : 3} className="py-3 px-4">
+                        <form onSubmit={handleSaveExamEdit} className="flex gap-3 items-end flex-wrap">
+                          <div>
+                            <label className="block text-xs font-medium mb-1">Exam name</label>
+                            <input className="input" required value={examEditForm.name} onChange={(e) => setExamEditForm({ ...examEditForm, name: e.target.value })} />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-medium mb-1">Term</label>
+                            <select className="input" value={examEditForm.term} onChange={(e) => setExamEditForm({ ...examEditForm, term: e.target.value })}>
+                              <option value="1">Term 1</option>
+                              <option value="2">Term 2</option>
+                              <option value="3">Term 3</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-xs font-medium mb-1">Year</label>
+                            <input className="input w-24" type="number" required value={examEditForm.year} onChange={(e) => setExamEditForm({ ...examEditForm, year: e.target.value })} />
+                          </div>
+                          <button className="btn-primary text-sm" type="submit">Save</button>
+                          <button className="btn-secondary text-sm" type="button" onClick={() => setEditingExamId(null)}>Cancel</button>
+                          {examEditError && <p className="text-rust text-sm w-full">{examEditError}</p>}
+                        </form>
+                      </td>
+                    </tr>
+                  ) : (
+                    <tr key={ex.id} className="border-b border-line/60">
+                      <td className="py-2 px-4">{ex.name}</td>
+                      <td className="py-2 px-4">Term {ex.term}</td>
+                      <td className="py-2 px-4">{ex.year}</td>
+                      {isAdmin && (
+                        <td className="py-2 px-4">
+                          <button className="text-xs text-ink underline underline-offset-2" onClick={() => handleEditExam(ex)}>
+                            Edit
+                          </button>
+                        </td>
+                      )}
+                    </tr>
+                  )
+                )}
+                {exams.length === 0 && (
+                  <tr><td colSpan={isAdmin ? 4 : 3} className="py-4 px-4 text-center text-slate/50">No exams for this class yet.</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
 
           {examId && subjectId && (
             <div className="card overflow-x-auto">

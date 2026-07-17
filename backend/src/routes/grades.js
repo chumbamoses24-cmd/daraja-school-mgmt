@@ -137,6 +137,22 @@ router.post("/exams", requireRole("ADMIN", "TEACHER"), async (req, res) => {
   res.status(201).json(await prisma.exam.create({ data: parsed.data }));
 });
 
+router.put("/exams/:id", requireRole("ADMIN"), async (req, res) => {
+  const schema = z.object({
+    name: z.string().min(1).optional(),
+    term: z.number().optional(),
+    year: z.number().optional(),
+  });
+  const parsed = schema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  const exam = await prisma.exam.update({
+    where: { id: Number(req.params.id) },
+    data: parsed.data,
+    include: { classRoom: { select: { name: true } } },
+  });
+  res.json(exam);
+});
+
 // ---- Grades ----
 // Bulk enter grades for one subject across a class for a given exam
 const bulkGradeSchema = z.object({
@@ -158,13 +174,16 @@ router.post("/", requireRole("ADMIN", "TEACHER"), async (req, res) => {
   const { examId, subjectId, records } = parsed.data;
 
   if (req.user.role === "TEACHER") {
-    const exam = await prisma.exam.findUnique({ where: { id: examId } });
+    const exam = await prisma.exam.findUnique({ where: { id: examId }, include: { classRoom: true } });
     if (!exam) return res.status(404).json({ error: "Exam not found" });
-    const assignment = await prisma.classSubject.findUnique({
-      where: { classRoomId_subjectId: { classRoomId: exam.classRoomId, subjectId } },
-    });
-    if (!assignment || assignment.teacherId !== req.user.id) {
-      return res.status(403).json({ error: "You are not assigned to teach this subject for this class" });
+    const isHomeroomTeacher = exam.classRoom.teacherId === req.user.id;
+    if (!isHomeroomTeacher) {
+      const assignment = await prisma.classSubject.findUnique({
+        where: { classRoomId_subjectId: { classRoomId: exam.classRoomId, subjectId } },
+      });
+      if (!assignment || assignment.teacherId !== req.user.id) {
+        return res.status(403).json({ error: "You are not assigned to teach this subject for this class" });
+      }
     }
   }
 
