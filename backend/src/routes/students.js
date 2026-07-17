@@ -22,6 +22,25 @@ router.post("/classrooms", requireRole("ADMIN"), async (req, res) => {
   res.status(201).json(classRoom);
 });
 
+// Edit a class's name, level, or homeroom teacher (e.g. reassigning to a different teacher).
+// Pass teacherId: null explicitly to unassign the homeroom teacher.
+router.put("/classrooms/:id", requireRole("ADMIN"), async (req, res) => {
+  const schema = z.object({
+    name: z.string().min(1).optional(),
+    level: z.string().min(1).optional(),
+    teacherId: z.number().nullable().optional(),
+  });
+  const parsed = schema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+
+  const classRoom = await prisma.classRoom.update({
+    where: { id: Number(req.params.id) },
+    data: parsed.data,
+    include: { teacher: { select: { id: true, firstName: true, lastName: true } }, _count: { select: { students: true } } },
+  });
+  res.json(classRoom);
+});
+
 // Deleting a class also cleans up records that only make sense in the context of that class:
 // timetable slots, subject/teacher assignments, fee structures, and exams (with their grades).
 // Students in the class are kept, just unassigned (classRoomId set to null) rather than deleted.
@@ -82,9 +101,9 @@ const studentSchema = z.object({
   admissionNo: z.string().min(1),
   firstName: z.string().min(1),
   lastName: z.string().min(1),
-  dob: z.string(), // ISO date
-  gender: z.string().min(1),
-  classRoomId: z.number().optional(),
+  classRoomId: z.number({ required_error: "Stream/class is required" }),
+  dob: z.string().optional().or(z.literal("")), // ISO date
+  gender: z.string().optional(),
   guardianName: z.string().optional(),
   guardianPhone: z.string().optional(),
   guardianEmail: z.string().email().optional().or(z.literal("")),
@@ -94,7 +113,8 @@ const studentSchema = z.object({
 router.post("/", requireRole("ADMIN"), async (req, res) => {
   const parsed = studentSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  const data = { ...parsed.data, dob: new Date(parsed.data.dob) };
+  const data = { ...parsed.data };
+  data.dob = data.dob ? new Date(data.dob) : null;
   const student = await prisma.student.create({ data });
   res.status(201).json(student);
 });
@@ -103,7 +123,7 @@ router.put("/:id", requireRole("ADMIN"), async (req, res) => {
   const parsed = studentSchema.partial().safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   const data = { ...parsed.data };
-  if (data.dob) data.dob = new Date(data.dob);
+  if (data.dob !== undefined) data.dob = data.dob ? new Date(data.dob) : null;
   const student = await prisma.student.update({ where: { id: Number(req.params.id) }, data });
   res.json(student);
 });

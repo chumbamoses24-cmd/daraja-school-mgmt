@@ -24,12 +24,12 @@ model SchoolSettings {
 
 model User {
   id                 Int           @id @default(autoincrement())
-  email              String        @unique
+  email              String?       @unique
+  phone              String?       @unique
   password           String
   role               String
   firstName          String
   lastName           String
-  phone              String?
   mustChangePassword Boolean       @default(false)
   createdAt          DateTime      @default(now())
 
@@ -64,8 +64,8 @@ model Student {
   admissionNo   String        @unique
   firstName     String
   lastName      String
-  dob           DateTime
-  gender        String
+  dob           DateTime?
+  gender        String?
   classRoomId   Int?
   classRoom     ClassRoom?    @relation(fields: [classRoomId], references: [id])
 

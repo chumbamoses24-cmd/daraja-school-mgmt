@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import client from "../api/client";
 import { useAuth } from "../context/AuthContext.jsx";
 
@@ -7,7 +8,7 @@ const emptyForm = {
   firstName: "",
   lastName: "",
   dob: "",
-  gender: "Male",
+  gender: "",
   classRoomId: "",
   guardianName: "",
   guardianPhone: "",
@@ -26,6 +27,7 @@ export default function Students() {
 
   const [classForm, setClassForm] = useState(emptyClassForm);
   const [showClassForm, setShowClassForm] = useState(false);
+  const [editingClassId, setEditingClassId] = useState(null);
   const [classError, setClassError] = useState("");
 
   function load() {
@@ -41,17 +43,33 @@ export default function Students() {
     e.preventDefault();
     setClassError("");
     try {
-      await client.post("/students/classrooms", {
+      const payload = {
         name: classForm.name,
         level: classForm.level,
-        teacherId: classForm.teacherId ? Number(classForm.teacherId) : undefined,
-      });
+        teacherId: classForm.teacherId ? Number(classForm.teacherId) : null,
+      };
+      if (editingClassId) {
+        await client.put(`/students/classrooms/${editingClassId}`, payload);
+      } else {
+        await client.post("/students/classrooms", payload);
+      }
       setClassForm(emptyClassForm);
+      setEditingClassId(null);
       setShowClassForm(false);
       load();
     } catch (err) {
-      setClassError(err.response?.data?.error?.formErrors?.join(", ") || "Could not create class");
+      setClassError(err.response?.data?.error?.formErrors?.join(", ") || "Could not save class");
     }
+  }
+
+  function handleEditClass(classRoom) {
+    setEditingClassId(classRoom.id);
+    setClassForm({
+      name: classRoom.name,
+      level: classRoom.level,
+      teacherId: classRoom.teacher?.id ? String(classRoom.teacher.id) : "",
+    });
+    setShowClassForm(true);
   }
 
   async function handleDeleteClass(classRoom) {
@@ -78,7 +96,7 @@ export default function Students() {
     e.preventDefault();
     setError("");
     try {
-      await client.post("/students", { ...form, classRoomId: form.classRoomId ? Number(form.classRoomId) : undefined });
+      await client.post("/students", { ...form, classRoomId: Number(form.classRoomId) });
       setForm(emptyForm);
       setShowForm(false);
       load();
@@ -93,13 +111,27 @@ export default function Students() {
         <div className="mb-8">
           <div className="flex items-center justify-between mb-4">
             <h3 className="font-display text-lg font-semibold">Classes</h3>
-            <button className="btn-secondary text-sm" onClick={() => setShowClassForm((v) => !v)}>
+            <button
+              className="btn-secondary text-sm"
+              onClick={() => {
+                if (showClassForm) {
+                  setShowClassForm(false);
+                  setEditingClassId(null);
+                  setClassForm(emptyClassForm);
+                } else {
+                  setShowClassForm(true);
+                }
+              }}
+            >
               {showClassForm ? "Cancel" : "+ New class"}
             </button>
           </div>
 
           {showClassForm && (
             <form onSubmit={handleAddClass} className="card p-6 mb-4 grid grid-cols-3 gap-4">
+              {editingClassId && (
+                <p className="col-span-3 text-xs uppercase tracking-wider text-slate/50 font-mono">Editing class</p>
+              )}
               <div>
                 <label className="block text-sm font-medium mb-1">Class name</label>
                 <input
@@ -134,14 +166,21 @@ export default function Students() {
                 </select>
               </div>
               {classError && <p className="text-rust text-sm col-span-3">{classError}</p>}
-              <button className="btn-primary col-span-3" type="submit">Save class</button>
+              <button className="btn-primary col-span-3" type="submit">
+                {editingClassId ? "Save changes" : "Save class"}
+              </button>
             </form>
           )}
 
           <div className="flex flex-wrap gap-2">
             {classRooms.map((c) => (
               <span key={c.id} className="pill border border-line bg-white flex items-center gap-2">
-                {c.name} <span className="text-slate/40">· {c._count?.students ?? 0} students</span>
+                <button className="hover:underline text-left" onClick={() => handleEditClass(c)} title="Edit class">
+                  {c.name}
+                </button>
+                <span className="text-slate/40">
+                  · {c._count?.students ?? 0} students · {c.teacher ? `${c.teacher.firstName} ${c.teacher.lastName}` : "no teacher"}
+                </span>
                 <button className="text-rust hover:underline" onClick={() => handleDeleteClass(c)} title="Delete class">
                   ×
                 </button>
@@ -164,37 +203,38 @@ export default function Students() {
       {showForm && (
         <form onSubmit={handleSubmit} className="card p-6 mb-6 grid grid-cols-2 gap-4">
           <div>
-            <label className="block text-sm font-medium mb-1">Admission No.</label>
+            <label className="block text-sm font-medium mb-1">Admission No. *</label>
             <input className="input" required value={form.admissionNo} onChange={(e) => setForm({ ...form, admissionNo: e.target.value })} />
           </div>
           <div>
-            <label className="block text-sm font-medium mb-1">Class</label>
-            <select className="input" value={form.classRoomId} onChange={(e) => setForm({ ...form, classRoomId: e.target.value })}>
-              <option value="">Unassigned</option>
+            <label className="block text-sm font-medium mb-1">Class / Stream *</label>
+            <select className="input" required value={form.classRoomId} onChange={(e) => setForm({ ...form, classRoomId: e.target.value })}>
+              <option value="">Select a class</option>
               {classRooms.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
           </div>
           <div>
-            <label className="block text-sm font-medium mb-1">First name</label>
+            <label className="block text-sm font-medium mb-1">First name *</label>
             <input className="input" required value={form.firstName} onChange={(e) => setForm({ ...form, firstName: e.target.value })} />
           </div>
           <div>
-            <label className="block text-sm font-medium mb-1">Last name</label>
+            <label className="block text-sm font-medium mb-1">Last name *</label>
             <input className="input" required value={form.lastName} onChange={(e) => setForm({ ...form, lastName: e.target.value })} />
           </div>
           <div>
             <label className="block text-sm font-medium mb-1">Date of birth</label>
-            <input className="input" type="date" required value={form.dob} onChange={(e) => setForm({ ...form, dob: e.target.value })} />
+            <input className="input" type="date" value={form.dob} onChange={(e) => setForm({ ...form, dob: e.target.value })} />
           </div>
           <div>
             <label className="block text-sm font-medium mb-1">Gender</label>
             <select className="input" value={form.gender} onChange={(e) => setForm({ ...form, gender: e.target.value })}>
+              <option value="">Not specified</option>
               <option>Male</option>
               <option>Female</option>
             </select>
           </div>
           <div className="col-span-2 pt-2 border-t border-line">
-            <p className="text-xs uppercase tracking-wider text-slate/50 font-mono mb-3">Guardian contact (optional)</p>
+            <p className="text-xs uppercase tracking-wider text-slate/50 font-mono mb-3">Guardian contact (optional — can be added later)</p>
           </div>
           <div>
             <label className="block text-sm font-medium mb-1">Guardian name</label>
@@ -229,7 +269,7 @@ export default function Students() {
         </form>
       )}
 
-      <div className="card overflow-hidden">
+      <div className="card overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
             <tr className="text-left text-slate/50 uppercase text-xs tracking-wider border-b border-line bg-line/20">
@@ -246,7 +286,11 @@ export default function Students() {
             {students.map((s) => (
               <tr key={s.id} className="border-b border-line/60 hover:bg-line/10">
                 <td className="py-3 px-4 font-mono text-xs text-slate/60">{s.admissionNo}</td>
-                <td className="py-3 px-4 font-medium">{s.firstName} {s.lastName}</td>
+                <td className="py-3 px-4 font-medium">
+                  <Link to={`/students/${s.id}`} className="hover:underline text-ink">
+                    {s.firstName} {s.lastName}
+                  </Link>
+                </td>
                 <td className="py-3 px-4">{s.classRoom?.name || "—"}</td>
                 <td className="py-3 px-4">{s.gender}</td>
                 <td className="py-3 px-4">{s.guardianName || (s.parent ? `${s.parent.firstName} ${s.parent.lastName}` : "—")}</td>

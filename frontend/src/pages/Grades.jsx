@@ -5,11 +5,14 @@ import { useAuth } from "../context/AuthContext.jsx";
 export default function Grades() {
   const { user } = useAuth();
   const canEnter = user.role === "ADMIN" || user.role === "TEACHER";
+  const isAdmin = user.role === "ADMIN";
 
   const [classRooms, setClassRooms] = useState([]);
   const [subjects, setSubjects] = useState([]);
   const [exams, setExams] = useState([]);
   const [students, setStudents] = useState([]);
+  const [teachers, setTeachers] = useState([]);
+  const [classSubjects, setClassSubjects] = useState([]);
 
   const [classRoomId, setClassRoomId] = useState("");
   const [subjectId, setSubjectId] = useState("");
@@ -25,17 +28,27 @@ export default function Grades() {
   const [examForm, setExamForm] = useState({ name: "", term: "1", year: String(new Date().getFullYear()) });
   const [examError, setExamError] = useState("");
 
+  const [showSubjectForm, setShowSubjectForm] = useState(false);
+  const [subjectForm, setSubjectForm] = useState({ name: "", code: "" });
+  const [subjectError, setSubjectError] = useState("");
+
+  const [showAssignForm, setShowAssignForm] = useState(false);
+  const [assignForm, setAssignForm] = useState({ subjectId: "", teacherId: "" });
+  const [assignError, setAssignError] = useState("");
+
   useEffect(() => {
     client.get("/students/classrooms").then((r) => {
       setClassRooms(r.data);
       if (r.data.length) setClassRoomId(String(r.data[0].id));
     });
-    client.get("/grades/subjects").then((r) => setSubjects(r.data));
+    refreshSubjects();
     client.get("/students").then((r) => setStudents(r.data));
+    if (isAdmin) client.get("/auth/users?role=TEACHER").then((r) => setTeachers(r.data)).catch(() => {});
   }, []);
 
   useEffect(() => {
     refreshExams();
+    refreshClassSubjects();
   }, [classRoomId]);
 
   useEffect(() => {
@@ -45,6 +58,55 @@ export default function Grades() {
   function refreshExams() {
     if (classRoomId) client.get(`/grades/exams?classRoomId=${classRoomId}`).then((r) => setExams(r.data));
   }
+
+  function refreshSubjects() {
+    client.get("/grades/subjects").then((r) => setSubjects(r.data));
+  }
+
+  function refreshClassSubjects() {
+    if (classRoomId) client.get(`/grades/class-subjects?classRoomId=${classRoomId}`).then((r) => setClassSubjects(r.data));
+  }
+
+  async function handleCreateSubject(e) {
+    e.preventDefault();
+    setSubjectError("");
+    try {
+      await client.post("/grades/subjects", subjectForm);
+      setSubjectForm({ name: "", code: "" });
+      setShowSubjectForm(false);
+      refreshSubjects();
+    } catch (err) {
+      setSubjectError(err.response?.data?.error?.formErrors?.join(", ") || "Could not create subject");
+    }
+  }
+
+  async function handleAssignTeacher(e) {
+    e.preventDefault();
+    setAssignError("");
+    try {
+      await client.post("/grades/class-subjects", {
+        classRoomId: Number(classRoomId),
+        subjectId: Number(assignForm.subjectId),
+        teacherId: Number(assignForm.teacherId),
+      });
+      setAssignForm({ subjectId: "", teacherId: "" });
+      setShowAssignForm(false);
+      refreshClassSubjects();
+    } catch (err) {
+      setAssignError(err.response?.data?.error?.formErrors?.join(", ") || "Could not save assignment");
+    }
+  }
+
+  async function handleRemoveAssignment(assignmentId) {
+    if (!window.confirm("Remove this teacher's assignment to this subject?")) return;
+    await client.delete(`/grades/class-subjects/${assignmentId}`);
+    refreshClassSubjects();
+  }
+
+  // Teachers only see subjects they're assigned to teach for the selected class.
+  const availableSubjects = isAdmin
+    ? subjects
+    : subjects.filter((s) => classSubjects.some((cs) => cs.subject.id === s.id && cs.teacher.id === user.id));
 
   async function handleCreateExam(e) {
     e.preventDefault();
@@ -97,6 +159,120 @@ export default function Grades() {
 
   return (
     <div className="space-y-10">
+      {isAdmin && (
+        <div>
+          <h2 className="text-2xl font-display font-semibold mb-6">Subjects &amp; teacher assignments</h2>
+
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="font-display text-lg font-semibold">Subjects</h3>
+            <button className="btn-secondary text-sm" onClick={() => setShowSubjectForm((v) => !v)}>
+              {showSubjectForm ? "Cancel" : "+ New subject"}
+            </button>
+          </div>
+          {showSubjectForm && (
+            <form onSubmit={handleCreateSubject} className="card p-4 mb-4 flex gap-3 items-end">
+              <div>
+                <label className="block text-xs font-medium mb-1">Subject name</label>
+                <input
+                  className="input"
+                  required
+                  placeholder="e.g. Kiswahili"
+                  value={subjectForm.name}
+                  onChange={(e) => setSubjectForm({ ...subjectForm, name: e.target.value })}
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium mb-1">Code</label>
+                <input
+                  className="input"
+                  required
+                  placeholder="e.g. KIS"
+                  value={subjectForm.code}
+                  onChange={(e) => setSubjectForm({ ...subjectForm, code: e.target.value })}
+                />
+              </div>
+              <button className="btn-primary" type="submit">Save subject</button>
+              {subjectError && <p className="text-rust text-sm">{subjectError}</p>}
+            </form>
+          )}
+          <div className="flex flex-wrap gap-2 mb-8">
+            {subjects.map((s) => (
+              <span key={s.id} className="pill border border-line bg-white">{s.name} <span className="text-slate/40">· {s.code}</span></span>
+            ))}
+            {subjects.length === 0 && <p className="text-slate/50 text-sm">No subjects yet — add one above.</p>}
+          </div>
+
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="font-display text-lg font-semibold">Assign teachers to subjects</h3>
+            <div className="flex gap-3 items-center">
+              <select className="input" value={classRoomId} onChange={(e) => setClassRoomId(e.target.value)}>
+                {classRooms.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+              <button className="btn-secondary text-sm whitespace-nowrap" onClick={() => setShowAssignForm((v) => !v)}>
+                {showAssignForm ? "Cancel" : "+ New assignment"}
+              </button>
+            </div>
+          </div>
+          {showAssignForm && (
+            <form onSubmit={handleAssignTeacher} className="card p-4 mb-4 flex gap-3 items-end">
+              <div>
+                <label className="block text-xs font-medium mb-1">Subject</label>
+                <select
+                  className="input"
+                  required
+                  value={assignForm.subjectId}
+                  onChange={(e) => setAssignForm({ ...assignForm, subjectId: e.target.value })}
+                >
+                  <option value="">Select subject</option>
+                  {subjects.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium mb-1">Teacher</label>
+                <select
+                  className="input"
+                  required
+                  value={assignForm.teacherId}
+                  onChange={(e) => setAssignForm({ ...assignForm, teacherId: e.target.value })}
+                >
+                  <option value="">Select teacher</option>
+                  {teachers.map((t) => <option key={t.id} value={t.id}>{t.firstName} {t.lastName}</option>)}
+                </select>
+              </div>
+              <button className="btn-primary" type="submit">Save assignment</button>
+              {assignError && <p className="text-rust text-sm">{assignError}</p>}
+            </form>
+          )}
+          <div className="card overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-slate/50 uppercase text-xs tracking-wider border-b border-line bg-line/20">
+                  <th className="py-2 px-4">Subject</th>
+                  <th className="py-2 px-4">Teacher</th>
+                  <th className="py-2 px-4"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {classSubjects.map((cs) => (
+                  <tr key={cs.id} className="border-b border-line/60">
+                    <td className="py-2 px-4">{cs.subject.name}</td>
+                    <td className="py-2 px-4">{cs.teacher.firstName} {cs.teacher.lastName}</td>
+                    <td className="py-2 px-4">
+                      <button className="text-xs text-rust underline underline-offset-2" onClick={() => handleRemoveAssignment(cs.id)}>
+                        Remove
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+                {classSubjects.length === 0 && (
+                  <tr><td colSpan={3} className="py-4 px-4 text-center text-slate/50">No subjects assigned to this class yet.</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
       {canEnter && (
         <div>
           <h2 className="text-2xl font-display font-semibold mb-6">Enter grades</h2>
@@ -110,12 +286,15 @@ export default function Grades() {
             </select>
             <select className="input" value={subjectId} onChange={(e) => setSubjectId(e.target.value)}>
               <option value="">Select subject</option>
-              {subjects.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+              {availableSubjects.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
             </select>
             <button className="btn-secondary whitespace-nowrap" onClick={() => setShowExamForm((v) => !v)}>
               {showExamForm ? "Cancel" : "+ New exam"}
             </button>
           </div>
+          {!isAdmin && availableSubjects.length === 0 && (
+            <p className="text-slate/50 text-sm mb-4">You haven't been assigned any subjects for this class yet — ask an admin to assign you one.</p>
+          )}
 
           {showExamForm && (
             <form onSubmit={handleCreateExam} className="card p-4 mb-4 flex gap-3 items-end">
@@ -153,7 +332,7 @@ export default function Grades() {
           )}
 
           {examId && subjectId && (
-            <div className="card overflow-hidden">
+            <div className="card overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="text-left text-slate/50 uppercase text-xs tracking-wider border-b border-line bg-line/20">

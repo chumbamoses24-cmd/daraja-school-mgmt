@@ -30,7 +30,7 @@ export default function Fees() {
   return (
     <div>
       <h2 className="text-2xl font-display font-semibold mb-6">{isAdmin ? "Fees & Payments" : "Fee Statement"}</h2>
-      <div className="card overflow-hidden">
+      <div className="card overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
             <tr className="text-left text-slate/50 uppercase text-xs tracking-wider border-b border-line bg-line/20">

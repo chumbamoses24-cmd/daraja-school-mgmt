@@ -56,7 +56,7 @@ export default function Attendance() {
     return (
       <div>
         <h2 className="text-2xl font-display font-semibold mb-6">Attendance history</h2>
-        <div className="card overflow-hidden">
+        <div className="card overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="text-left text-slate/50 uppercase text-xs tracking-wider border-b border-line bg-line/20">
@@ -95,7 +95,7 @@ export default function Attendance() {
         </div>
       </div>
 
-      <div className="card overflow-hidden">
+      <div className="card overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
             <tr className="text-left text-slate/50 uppercase text-xs tracking-wider border-b border-line bg-line/20">

@@ -7,7 +7,7 @@ export default function Login() {
   const { login } = useAuth();
   const { schoolName } = useSchool();
   const navigate = useNavigate();
-  const [email, setEmail] = useState("admin@school.test");
+  const [identifier, setIdentifier] = useState("admin@school.test");
   const [password, setPassword] = useState("password123");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -17,7 +17,7 @@ export default function Login() {
     setError("");
     setLoading(true);
     try {
-      await login(email, password);
+      await login(identifier, password);
       navigate("/");
     } catch (err) {
       setError(err.response?.data?.error || "Login failed. Check your credentials.");
@@ -35,8 +35,8 @@ export default function Login() {
         </div>
         <form onSubmit={handleSubmit} className="card p-8 space-y-4">
           <div>
-            <label className="block text-sm font-medium mb-1">Email</label>
-            <input className="input" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
+            <label className="block text-sm font-medium mb-1">Email or phone</label>
+            <input className="input" value={identifier} onChange={(e) => setIdentifier(e.target.value)} required />
           </div>
           <div>
             <label className="block text-sm font-medium mb-1">Password</label>

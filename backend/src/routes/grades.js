@@ -65,6 +65,47 @@ router.post("/subjects", requireRole("ADMIN"), async (req, res) => {
   res.status(201).json(await prisma.subject.create({ data: parsed.data }));
 });
 
+// ---- Subject assignments (which teacher teaches which subject in which class) ----
+router.get("/class-subjects", async (req, res) => {
+  const { classRoomId, teacherId } = req.query;
+  const where = {};
+  if (classRoomId) where.classRoomId = Number(classRoomId);
+  if (teacherId) where.teacherId = Number(teacherId);
+  // Teachers only see their own assignments unless they're also filtering as admin would
+  if (req.user.role === "TEACHER" && !teacherId) where.teacherId = req.user.id;
+
+  const assignments = await prisma.classSubject.findMany({
+    where,
+    include: {
+      classRoom: { select: { id: true, name: true } },
+      subject: { select: { id: true, name: true, code: true } },
+      teacher: { select: { id: true, firstName: true, lastName: true } },
+    },
+  });
+  res.json(assignments);
+});
+
+router.post("/class-subjects", requireRole("ADMIN"), async (req, res) => {
+  const schema = z.object({ classRoomId: z.number(), subjectId: z.number(), teacherId: z.number() });
+  const parsed = schema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+
+  const existing = await prisma.classSubject.findUnique({
+    where: { classRoomId_subjectId: { classRoomId: parsed.data.classRoomId, subjectId: parsed.data.subjectId } },
+  });
+
+  const assignment = existing
+    ? await prisma.classSubject.update({ where: { id: existing.id }, data: { teacherId: parsed.data.teacherId } })
+    : await prisma.classSubject.create({ data: parsed.data });
+
+  res.status(201).json(assignment);
+});
+
+router.delete("/class-subjects/:id", requireRole("ADMIN"), async (req, res) => {
+  await prisma.classSubject.delete({ where: { id: Number(req.params.id) } });
+  res.status(204).end();
+});
+
 // ---- Exams ----
 router.get("/exams", async (req, res) => {
   const { classRoomId } = req.query;
@@ -107,6 +148,17 @@ router.post("/", requireRole("ADMIN", "TEACHER"), async (req, res) => {
   const parsed = bulkGradeSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   const { examId, subjectId, records } = parsed.data;
+
+  if (req.user.role === "TEACHER") {
+    const exam = await prisma.exam.findUnique({ where: { id: examId } });
+    if (!exam) return res.status(404).json({ error: "Exam not found" });
+    const assignment = await prisma.classSubject.findUnique({
+      where: { classRoomId_subjectId: { classRoomId: exam.classRoomId, subjectId } },
+    });
+    if (!assignment || assignment.teacherId !== req.user.id) {
+      return res.status(403).json({ error: "You are not assigned to teach this subject for this class" });
+    }
+  }
 
   const results = await Promise.all(
     records.map((r) =>

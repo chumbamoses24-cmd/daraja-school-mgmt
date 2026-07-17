@@ -8,16 +8,18 @@ const { requireAuth, requireRole } = require("../middleware/auth");
 const router = express.Router();
 
 const loginSchema = z.object({
-  email: z.string().email(),
+  identifier: z.string().min(1), // email or phone
   password: z.string().min(1),
 });
 
 router.post("/login", async (req, res) => {
   const parsed = loginSchema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: "Invalid email or password format" });
+  if (!parsed.success) return res.status(400).json({ error: "Enter your email/phone and password" });
 
-  const { email, password } = parsed.data;
-  const user = await prisma.user.findUnique({ where: { email } });
+  const { identifier, password } = parsed.data;
+  const user = await prisma.user.findFirst({
+    where: { OR: [{ email: identifier }, { phone: identifier }] },
+  });
   if (!user) return res.status(401).json({ error: "Invalid credentials" });
 
   const valid = await bcrypt.compare(password, user.password);
@@ -54,16 +56,25 @@ const updateProfileSchema = z.object({
   firstName: z.string().min(1),
   lastName: z.string().min(1),
   phone: z.string().optional(),
+  email: z.string().email().optional().or(z.literal("")),
 });
 
-// Self-service profile edit (name, phone). Email and role are not editable here.
+// Self-service profile edit (name, phone, email). Role is not editable here.
 router.put("/me", requireAuth, async (req, res) => {
   const parsed = updateProfileSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
+  const data = { ...parsed.data };
+  if (data.email === "") data.email = null;
+
+  if (data.email) {
+    const existing = await prisma.user.findUnique({ where: { email: data.email } });
+    if (existing && existing.id !== req.user.id) return res.status(409).json({ error: "Email already in use" });
+  }
+
   const user = await prisma.user.update({
     where: { id: req.user.id },
-    data: parsed.data,
+    data,
     select: { id: true, email: true, role: true, firstName: true, lastName: true, phone: true, mustChangePassword: true },
   });
   res.json(user);
@@ -92,29 +103,36 @@ router.post("/change-password", requireAuth, async (req, res) => {
 });
 
 const createUserSchema = z.object({
-  email: z.string().email(),
+  email: z.string().email().optional().or(z.literal("")),
+  phone: z.string().min(1, "Phone number is required"),
   password: z.string().min(6),
   role: z.enum(["ADMIN", "TEACHER", "PARENT"]),
   firstName: z.string().min(1),
   lastName: z.string().min(1),
-  phone: z.string().optional(),
 });
 
 // Only admins can create new staff/parent accounts.
+// Phone is the required identifier; email is optional and can be added later.
 // New accounts are created with a temporary password and must change it on first login.
 router.post("/users", requireAuth, requireRole("ADMIN"), async (req, res) => {
   const parsed = createUserSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
-  const { email, password, role, firstName, lastName, phone } = parsed.data;
-  const existing = await prisma.user.findUnique({ where: { email } });
-  if (existing) return res.status(409).json({ error: "Email already in use" });
+  const { phone, password, role, firstName, lastName } = parsed.data;
+  const email = parsed.data.email === "" ? null : parsed.data.email;
+
+  const existingPhone = await prisma.user.findUnique({ where: { phone } });
+  if (existingPhone) return res.status(409).json({ error: "Phone number already in use" });
+  if (email) {
+    const existingEmail = await prisma.user.findUnique({ where: { email } });
+    if (existingEmail) return res.status(409).json({ error: "Email already in use" });
+  }
 
   const hashed = await bcrypt.hash(password, 10);
   const user = await prisma.user.create({
-    data: { email, password: hashed, role, firstName, lastName, phone, mustChangePassword: true },
+    data: { email, phone, password: hashed, role, firstName, lastName, mustChangePassword: true },
   });
-  res.status(201).json({ id: user.id, email: user.email, role: user.role });
+  res.status(201).json({ id: user.id, email: user.email, phone: user.phone, role: user.role });
 });
 
 router.get("/users", requireAuth, requireRole("ADMIN"), async (req, res) => {
@@ -124,6 +142,41 @@ router.get("/users", requireAuth, requireRole("ADMIN"), async (req, res) => {
     select: { id: true, email: true, role: true, firstName: true, lastName: true, phone: true, mustChangePassword: true },
   });
   res.json(users);
+});
+
+const adminEditUserSchema = z.object({
+  firstName: z.string().min(1).optional(),
+  lastName: z.string().min(1).optional(),
+  phone: z.string().min(1).optional(),
+  email: z.string().email().optional().or(z.literal("")),
+  role: z.enum(["ADMIN", "TEACHER", "PARENT"]).optional(),
+});
+
+// Admin editing another user's details — e.g. filling in an email that was skipped at creation,
+// correcting a phone number, or changing role.
+router.put("/users/:id", requireAuth, requireRole("ADMIN"), async (req, res) => {
+  const userId = Number(req.params.id);
+  const parsed = adminEditUserSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+
+  const data = { ...parsed.data };
+  if (data.email === "") data.email = null;
+
+  if (data.email) {
+    const existing = await prisma.user.findUnique({ where: { email: data.email } });
+    if (existing && existing.id !== userId) return res.status(409).json({ error: "Email already in use" });
+  }
+  if (data.phone) {
+    const existing = await prisma.user.findUnique({ where: { phone: data.phone } });
+    if (existing && existing.id !== userId) return res.status(409).json({ error: "Phone number already in use" });
+  }
+
+  const user = await prisma.user.update({
+    where: { id: userId },
+    data,
+    select: { id: true, email: true, role: true, firstName: true, lastName: true, phone: true, mustChangePassword: true },
+  });
+  res.json(user);
 });
 
 // Deleting a user unlinks them from records that can survive without them (homeroom class,
