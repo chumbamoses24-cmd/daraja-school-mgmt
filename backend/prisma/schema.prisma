@@ -48,8 +48,9 @@ model User {
 
 model ClassRoom {
   id            Int             @id @default(autoincrement())
-  name          String          // e.g. "Grade 7 Blue"
-  level         String          // e.g. "Grade 7"
+  name          String          // Display name, e.g. "Grade 7 East" — auto-built from level + stream
+  level         String          // e.g. "Grade 7" — shared across multiple streams
+  stream        String?         // e.g. "East", "West", "Blue" — the specific stream within a level
   teacherId     Int?
   teacher       User?           @relation("HomeroomTeacher", fields: [teacherId], references: [id])
   students      Student[]
@@ -73,6 +74,7 @@ model Student {
   guardianName  String?
   guardianPhone String?
   guardianEmail String?
+  photo         String?       // base64 data URI, optional — set during or after admission
 
   // Optional link to an actual parent-portal login (kept separate; only used if a parent account exists).
   parentId      Int?

@@ -231,33 +231,8 @@ router.get("/", async (req, res) => {
 });
 
 // Report card: all grades for a student in a given exam, with average & simple letter grade
-router.get("/report-card/:studentId/:examId", async (req, res) => {
-  try {
-    const data = await buildReportCard(Number(req.params.studentId), Number(req.params.examId), req.user);
-    res.json(data);
-  } catch (err) {
-    if (err.status) return res.status(err.status).json({ error: err.message });
-    throw err;
-  }
-});
-
-// Report card as a downloadable PDF
-router.get("/report-card/:studentId/:examId/pdf", async (req, res) => {
-  let data;
-  try {
-    data = await buildReportCard(Number(req.params.studentId), Number(req.params.examId), req.user);
-  } catch (err) {
-    if (err.status) return res.status(err.status).json({ error: err.message });
-    throw err;
-  }
-
-  const fileName = `report-card-${data.student.name.replace(/\s+/g, "-").toLowerCase()}-${data.exam.term}-${data.exam.year}.pdf`;
-  res.setHeader("Content-Type", "application/pdf");
-  res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
-
-  const doc = new PDFDocument({ size: "A4", margin: 50 });
-  doc.pipe(res);
-
+// Draws one report card onto the current page of an open PDFDocument. Does not call doc.end().
+function drawReportCardPage(doc, data) {
   const inkColor = "#1B2A4A";
   const mossColor = "#2F6B4F";
   const rustColor = "#C1502E";
@@ -335,6 +310,62 @@ router.get("/report-card/:studentId/:examId/pdf", async (req, res) => {
     .fillColor("#888888")
     .fontSize(8)
     .text(`Generated on ${new Date().toLocaleDateString()} · Daraja School Register`, 50, 780, { align: "center", width: 495 });
+}
+
+router.get("/report-card/:studentId/:examId", async (req, res) => {
+  try {
+    const data = await buildReportCard(Number(req.params.studentId), Number(req.params.examId), req.user);
+    res.json(data);
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    throw err;
+  }
+});
+
+// Report card as a downloadable PDF — one student
+router.get("/report-card/:studentId/:examId/pdf", async (req, res) => {
+  let data;
+  try {
+    data = await buildReportCard(Number(req.params.studentId), Number(req.params.examId), req.user);
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    throw err;
+  }
+
+  const fileName = `report-card-${data.student.name.replace(/\s+/g, "-").toLowerCase()}-${data.exam.term}-${data.exam.year}.pdf`;
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
+
+  const doc = new PDFDocument({ size: "A4", margin: 50 });
+  doc.pipe(res);
+  drawReportCardPage(doc, data);
+  doc.end();
+});
+
+// Report cards for an entire class, one page per student — same exam.
+router.get("/report-cards/class/:classRoomId/:examId/pdf", requireRole("ADMIN", "TEACHER"), async (req, res) => {
+  const classRoomId = Number(req.params.classRoomId);
+  const examId = Number(req.params.examId);
+
+  const students = await prisma.student.findMany({
+    where: { classRoomId },
+    orderBy: { admissionNo: "asc" },
+  });
+  if (students.length === 0) return res.status(404).json({ error: "No students found in this class" });
+
+  const exam = await prisma.exam.findUnique({ where: { id: examId }, include: { classRoom: { select: { name: true } } } });
+  const fileName = `report-cards-${(exam?.classRoom?.name || "class").replace(/\s+/g, "-").toLowerCase()}-${req.params.examId}.pdf`;
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
+
+  const doc = new PDFDocument({ size: "A4", margin: 50 });
+  doc.pipe(res);
+
+  for (let i = 0; i < students.length; i++) {
+    const data = await buildReportCard(students[i].id, examId, req.user);
+    if (i > 0) doc.addPage();
+    drawReportCardPage(doc, data);
+  }
 
   doc.end();
 });

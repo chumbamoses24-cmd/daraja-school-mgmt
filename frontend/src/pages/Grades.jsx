@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import * as XLSX from "xlsx";
 import client from "../api/client";
 import { useAuth } from "../context/AuthContext.jsx";
 
@@ -23,6 +24,7 @@ export default function Grades() {
   const [reportStudentId, setReportStudentId] = useState("");
   const [reportExamId, setReportExamId] = useState("");
   const [reportCard, setReportCard] = useState(null);
+  const [printMode, setPrintMode] = useState("individual"); // "individual" | "class"
 
   const [showExamForm, setShowExamForm] = useState(false);
   const [examForm, setExamForm] = useState({ name: "", term: "1", year: String(new Date().getFullYear()), classRoomIds: [] });
@@ -184,11 +186,66 @@ export default function Grades() {
     }
   }
 
+  const [excelError, setExcelError] = useState("");
+  const [excelSummary, setExcelSummary] = useState("");
+
   async function handleSaveScores() {
     const records = Object.entries(scores).map(([studentId, score]) => ({ studentId: Number(studentId), score: Number(score) }));
     await client.post("/grades", { examId: Number(examId), subjectId: Number(subjectId), records });
     setSaved(true);
     setTimeout(() => setSaved(false), 2500);
+  }
+
+  // Reads an uploaded .xlsx with columns "Admission No" and "Score", matches students by admission
+  // number, and fills the score entry table so the teacher can review before saving.
+  async function handleExcelUpload(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setExcelError("");
+    setExcelSummary("");
+    try {
+      const buffer = await file.arrayBuffer();
+      const workbook = XLSX.read(buffer, { type: "array" });
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(sheet);
+
+      if (rows.length === 0) {
+        setExcelError("That file appears to be empty.");
+        return;
+      }
+
+      const findKey = (row, candidates) => Object.keys(row).find((k) => candidates.includes(k.trim().toLowerCase()));
+      const admKey = findKey(rows[0], ["admission no", "admissionno", "adm no", "adm"]);
+      const scoreKey = findKey(rows[0], ["score", "marks", "mark"]);
+
+      if (!admKey || !scoreKey) {
+        setExcelError('Could not find "Admission No" and "Score" columns in that file.');
+        return;
+      }
+
+      const newScores = { ...scores };
+      let matched = 0;
+      let unmatched = [];
+      rows.forEach((row) => {
+        const admNo = String(row[admKey]).trim();
+        const student = students.find((s) => s.admissionNo === admNo);
+        if (student && row[scoreKey] !== undefined && row[scoreKey] !== "") {
+          newScores[student.id] = row[scoreKey];
+          matched++;
+        } else if (admNo) {
+          unmatched.push(admNo);
+        }
+      });
+      setScores(newScores);
+      setExcelSummary(
+        `Loaded ${matched} score(s) from the file.` +
+          (unmatched.length ? ` Could not match: ${unmatched.slice(0, 5).join(", ")}${unmatched.length > 5 ? "…" : ""}` : " Review below, then click Save scores.")
+      );
+    } catch {
+      setExcelError("Could not read that file — make sure it's a valid .xlsx file.");
+    } finally {
+      e.target.value = "";
+    }
   }
 
   async function loadReportCard() {
@@ -208,6 +265,23 @@ export default function Grades() {
     const match = disposition.match(/filename="(.+)"/);
     link.href = url;
     link.download = match ? match[1] : "report-card.pdf";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(url);
+  }
+
+  async function downloadClassReportCardsPdf() {
+    if (!classRoomId || !reportExamId) return;
+    const res = await client.get(`/grades/report-cards/class/${classRoomId}/${reportExamId}/pdf`, {
+      responseType: "blob",
+    });
+    const url = window.URL.createObjectURL(new Blob([res.data], { type: "application/pdf" }));
+    const link = document.createElement("a");
+    const disposition = res.headers["content-disposition"] || "";
+    const match = disposition.match(/filename="(.+)"/);
+    link.href = url;
+    link.download = match ? match[1] : "report-cards.pdf";
     document.body.appendChild(link);
     link.click();
     link.remove();
@@ -499,6 +573,15 @@ export default function Grades() {
 
           {examId && subjectId && (
             <div className="card overflow-x-auto">
+              <div className="p-4 border-b border-line flex items-center gap-3 flex-wrap">
+                <label className="btn-secondary text-sm cursor-pointer">
+                  Upload scores from Excel
+                  <input type="file" accept=".xlsx,.xls" className="hidden" onChange={handleExcelUpload} />
+                </label>
+                <span className="text-xs text-slate/40">Columns: "Admission No" and "Score"</span>
+              </div>
+              {excelError && <p className="text-rust text-sm px-4 pt-3">{excelError}</p>}
+              {excelSummary && <p className="text-moss text-sm px-4 pt-3">{excelSummary}</p>}
               <table className="w-full text-sm">
                 <thead>
                   <tr className="text-left text-slate/50 uppercase text-xs tracking-wider border-b border-line bg-line/20">
@@ -535,19 +618,55 @@ export default function Grades() {
 
       <div>
         <h2 className="text-2xl font-display font-semibold mb-6">Report card</h2>
-        <div className="flex gap-3 mb-4">
-          <select className="input" value={reportStudentId} onChange={(e) => setReportStudentId(e.target.value)}>
-            <option value="">Select student</option>
-            {students.map((s) => <option key={s.id} value={s.id}>{s.firstName} {s.lastName}</option>)}
-          </select>
-          <select className="input" value={reportExamId} onChange={(e) => setReportExamId(e.target.value)}>
-            <option value="">Select exam</option>
-            {exams.map((ex) => <option key={ex.id} value={ex.id}>{ex.name} (Term {ex.term}, {ex.year})</option>)}
-          </select>
-          <button className="btn-secondary" onClick={loadReportCard}>View</button>
+        <div className="flex gap-2 mb-4">
+          <button
+            className={`pill border cursor-pointer ${printMode === "individual" ? "border-ink bg-ink text-paper" : "border-line bg-white text-slate/70"}`}
+            onClick={() => setPrintMode("individual")}
+          >
+            Individual student
+          </button>
+          <button
+            className={`pill border cursor-pointer ${printMode === "class" ? "border-ink bg-ink text-paper" : "border-line bg-white text-slate/70"}`}
+            onClick={() => setPrintMode("class")}
+          >
+            Entire class
+          </button>
         </div>
 
-        {reportCard && (
+        {printMode === "individual" ? (
+          <div className="flex gap-3 mb-4">
+            <select className="input" value={reportStudentId} onChange={(e) => setReportStudentId(e.target.value)}>
+              <option value="">Select student</option>
+              {students.map((s) => <option key={s.id} value={s.id}>{s.firstName} {s.lastName}</option>)}
+            </select>
+            <select className="input" value={reportExamId} onChange={(e) => setReportExamId(e.target.value)}>
+              <option value="">Select exam</option>
+              {exams.map((ex) => <option key={ex.id} value={ex.id}>{ex.name} (Term {ex.term}, {ex.year})</option>)}
+            </select>
+            <button className="btn-secondary" onClick={loadReportCard}>View</button>
+          </div>
+        ) : (
+          <div className="flex gap-3 mb-4 items-end">
+            <div>
+              <label className="block text-xs font-medium mb-1">Class</label>
+              <select className="input" value={classRoomId} onChange={(e) => setClassRoomId(e.target.value)}>
+                {classRooms.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium mb-1">Exam</label>
+              <select className="input" value={reportExamId} onChange={(e) => setReportExamId(e.target.value)}>
+                <option value="">Select exam</option>
+                {exams.map((ex) => <option key={ex.id} value={ex.id}>{ex.name} (Term {ex.term}, {ex.year})</option>)}
+              </select>
+            </div>
+            <button className="btn-primary" disabled={!reportExamId} onClick={downloadClassReportCardsPdf}>
+              Download all report cards (PDF)
+            </button>
+          </div>
+        )}
+
+        {printMode === "individual" && reportCard && (
           <div className="card p-6">
             <div className="flex justify-between items-start mb-6 pb-4 border-b border-line">
               <div>

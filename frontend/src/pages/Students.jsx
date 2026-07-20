@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
+import * as XLSX from "xlsx";
 import client from "../api/client";
 import { useAuth } from "../context/AuthContext.jsx";
 
@@ -13,17 +14,50 @@ const emptyForm = {
   guardianName: "",
   guardianPhone: "",
   guardianEmail: "",
+  photo: "",
 };
-const emptyClassForm = { name: "", level: "", teacherId: "" };
+const emptyClassForm = { level: "", stream: "", name: "", teacherId: "" };
+const STREAM_SUGGESTIONS = ["East", "West", "North", "South", "Red", "Blue", "Green", "Yellow"];
+
+// Resizes/compresses an image file client-side before storing it as base64, so photos stay small.
+function resizeImageToDataUrl(file, maxDimension = 240) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        let { width, height } = img;
+        if (width > height && width > maxDimension) {
+          height = Math.round((height * maxDimension) / width);
+          width = maxDimension;
+        } else if (height > maxDimension) {
+          width = Math.round((width * maxDimension) / height);
+          height = maxDimension;
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        canvas.getContext("2d").drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL("image/jpeg", 0.8));
+      };
+      img.onerror = reject;
+      img.src = reader.result;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
 
 export default function Students() {
   const { user } = useAuth();
   const [students, setStudents] = useState([]);
   const [classRooms, setClassRooms] = useState([]);
+  const [levels, setLevels] = useState([]);
   const [teachers, setTeachers] = useState([]);
   const [form, setForm] = useState(emptyForm);
   const [showForm, setShowForm] = useState(false);
   const [error, setError] = useState("");
+  const [photoError, setPhotoError] = useState("");
 
   const [classForm, setClassForm] = useState(emptyClassForm);
   const [showClassForm, setShowClassForm] = useState(false);
@@ -33,19 +67,33 @@ export default function Students() {
   function load() {
     client.get("/students").then((r) => setStudents(r.data));
     client.get("/students/classrooms").then((r) => setClassRooms(r.data));
+    client.get("/students/classrooms/levels").then((r) => setLevels(r.data)).catch(() => {});
     if (user.role === "ADMIN") {
       client.get("/auth/users?role=TEACHER").then((r) => setTeachers(r.data)).catch(() => {});
     }
   }
   useEffect(load, []);
 
+  // Keep the display name in sync with level + stream as the admin types, unless they're editing an
+  // existing class whose name doesn't follow that pattern (then leave it alone).
+  function updateClassField(field, value) {
+    setClassForm((f) => {
+      const next = { ...f, [field]: value };
+      if (field === "level" || field === "stream") {
+        next.name = [next.level, next.stream].filter(Boolean).join(" ");
+      }
+      return next;
+    });
+  }
+
   async function handleAddClass(e) {
     e.preventDefault();
     setClassError("");
     try {
       const payload = {
-        name: classForm.name,
+        name: classForm.name || classForm.level,
         level: classForm.level,
+        stream: classForm.stream || undefined,
         teacherId: classForm.teacherId ? Number(classForm.teacherId) : null,
       };
       if (editingClassId) {
@@ -65,8 +113,9 @@ export default function Students() {
   function handleEditClass(classRoom) {
     setEditingClassId(classRoom.id);
     setClassForm({
-      name: classRoom.name,
       level: classRoom.level,
+      stream: classRoom.stream || "",
+      name: classRoom.name,
       teacherId: classRoom.teacher?.id ? String(classRoom.teacher.id) : "",
     });
     setShowClassForm(true);
@@ -92,6 +141,22 @@ export default function Students() {
     }
   }
 
+  async function handlePhotoChange(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setPhotoError("");
+    if (!file.type.startsWith("image/")) {
+      setPhotoError("Please choose an image file.");
+      return;
+    }
+    try {
+      const dataUrl = await resizeImageToDataUrl(file);
+      setForm((f) => ({ ...f, photo: dataUrl }));
+    } catch {
+      setPhotoError("Could not process that image.");
+    }
+  }
+
   async function handleSubmit(e) {
     e.preventDefault();
     setError("");
@@ -103,6 +168,32 @@ export default function Students() {
     } catch (err) {
       setError(err.response?.data?.error?.formErrors?.join(", ") || "Could not add student");
     }
+  }
+
+  function downloadClassExcel(groupName, groupStudents) {
+    const rows = groupStudents.map((s) => ({
+      "Adm No": s.admissionNo,
+      Name: `${s.firstName} ${s.lastName}`,
+      Gender: s.gender || "",
+      "Guardian": s.guardianName || (s.parent ? `${s.parent.firstName} ${s.parent.lastName}` : ""),
+      "Guardian Phone": s.guardianPhone || s.parent?.phone || "",
+    }));
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Class List");
+    XLSX.writeFile(wb, `${groupName.replace(/\s+/g, "-").toLowerCase()}-class-list.xlsx`);
+  }
+
+  async function downloadClassPdf(classRoomId, groupName) {
+    const res = await client.get(`/students/classrooms/${classRoomId}/pdf`, { responseType: "blob" });
+    const url = window.URL.createObjectURL(new Blob([res.data], { type: "application/pdf" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${groupName.replace(/\s+/g, "-").toLowerCase()}-class-list.pdf`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(url);
   }
 
   return (
@@ -128,29 +219,48 @@ export default function Students() {
           </div>
 
           {showClassForm && (
-            <form onSubmit={handleAddClass} className="card p-6 mb-4 grid grid-cols-3 gap-4">
+            <form onSubmit={handleAddClass} className="card p-6 mb-4 grid grid-cols-2 gap-4">
               {editingClassId && (
-                <p className="col-span-3 text-xs uppercase tracking-wider text-slate/50 font-mono">Editing class</p>
+                <p className="col-span-2 text-xs uppercase tracking-wider text-slate/50 font-mono">Editing class</p>
               )}
               <div>
-                <label className="block text-sm font-medium mb-1">Class name</label>
+                <label className="block text-sm font-medium mb-1">Level *</label>
                 <input
                   className="input"
                   required
-                  placeholder="e.g. Grade 8 Green"
+                  list="level-suggestions"
+                  placeholder="e.g. Grade 7"
+                  value={classForm.level}
+                  onChange={(e) => updateClassField("level", e.target.value)}
+                />
+                <datalist id="level-suggestions">
+                  {levels.map((l) => <option key={l} value={l} />)}
+                </datalist>
+                <p className="text-xs text-slate/40 mt-1">Reuse an existing level to add another stream under it, or type a new one.</p>
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1">Stream</label>
+                <input
+                  className="input"
+                  list="stream-suggestions"
+                  placeholder="e.g. East (optional)"
+                  value={classForm.stream}
+                  onChange={(e) => updateClassField("stream", e.target.value)}
+                />
+                <datalist id="stream-suggestions">
+                  {STREAM_SUGGESTIONS.map((s) => <option key={s} value={s} />)}
+                </datalist>
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1">Display name</label>
+                <input
+                  className="input"
+                  required
+                  placeholder="Auto-filled from level + stream"
                   value={classForm.name}
                   onChange={(e) => setClassForm({ ...classForm, name: e.target.value })}
                 />
-              </div>
-              <div>
-                <label className="block text-sm font-medium mb-1">Level</label>
-                <input
-                  className="input"
-                  required
-                  placeholder="e.g. Grade 8"
-                  value={classForm.level}
-                  onChange={(e) => setClassForm({ ...classForm, level: e.target.value })}
-                />
+                <p className="text-xs text-slate/40 mt-1">Feel free to override this if you'd like a custom name.</p>
               </div>
               <div>
                 <label className="block text-sm font-medium mb-1">Homeroom teacher</label>
@@ -165,8 +275,8 @@ export default function Students() {
                   ))}
                 </select>
               </div>
-              {classError && <p className="text-rust text-sm col-span-3">{classError}</p>}
-              <button className="btn-primary col-span-3" type="submit">
+              {classError && <p className="text-rust text-sm col-span-2">{classError}</p>}
+              <button className="btn-primary col-span-2" type="submit">
                 {editingClassId ? "Save changes" : "Save class"}
               </button>
             </form>
@@ -233,6 +343,14 @@ export default function Students() {
               <option>Female</option>
             </select>
           </div>
+          <div className="col-span-2">
+            <label className="block text-sm font-medium mb-1">Passport photo (optional)</label>
+            <div className="flex items-center gap-4">
+              {form.photo && <img src={form.photo} alt="Preview" className="w-16 h-16 rounded object-cover border border-line" />}
+              <input className="input" type="file" accept="image/*" onChange={handlePhotoChange} />
+            </div>
+            {photoError && <p className="text-rust text-xs mt-1">{photoError}</p>}
+          </div>
           <div className="col-span-2 pt-2 border-t border-line">
             <p className="text-xs uppercase tracking-wider text-slate/50 font-mono mb-3">Guardian contact (optional — can be added later)</p>
           </div>
@@ -273,13 +391,18 @@ export default function Students() {
         const groups = {};
         students.forEach((s) => {
           const key = s.classRoom?.name || "Unassigned";
-          if (!groups[key]) groups[key] = [];
-          groups[key].push(s);
+          if (!groups[key]) groups[key] = { classRoomId: s.classRoom?.id || null, students: [] };
+          groups[key].students.push(s);
         });
         const groupNames = Object.keys(groups).sort((a, b) => {
           if (a === "Unassigned") return 1;
           if (b === "Unassigned") return -1;
           return a.localeCompare(b);
+        });
+        groupNames.forEach((name) => {
+          groups[name].students.sort((a, b) =>
+            a.admissionNo.localeCompare(b.admissionNo, undefined, { numeric: true, sensitivity: "base" })
+          );
         });
 
         if (students.length === 0) {
@@ -288,13 +411,32 @@ export default function Students() {
 
         return groupNames.map((groupName) => (
           <div key={groupName} className="mb-8">
-            <h3 className="font-display text-lg font-semibold mb-3">
-              {groupName} <span className="text-slate/40 text-sm font-body font-normal">· {groups[groupName].length} students</span>
-            </h3>
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="font-display text-lg font-semibold">
+                {groupName} <span className="text-slate/40 text-sm font-body font-normal">· {groups[groupName].students.length} students</span>
+              </h3>
+              {groups[groupName].classRoomId && (
+                <div className="flex gap-3">
+                  <button
+                    className="text-xs text-ink underline underline-offset-2"
+                    onClick={() => downloadClassPdf(groups[groupName].classRoomId, groupName)}
+                  >
+                    Download PDF
+                  </button>
+                  <button
+                    className="text-xs text-ink underline underline-offset-2"
+                    onClick={() => downloadClassExcel(groupName, groups[groupName].students)}
+                  >
+                    Download Excel
+                  </button>
+                </div>
+              )}
+            </div>
             <div className="card overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="text-left text-slate/50 uppercase text-xs tracking-wider border-b border-line bg-line/20">
+                    <th className="py-3 px-4"></th>
                     <th className="py-3 px-4 font-mono">Adm. No</th>
                     <th className="py-3 px-4">Name</th>
                     <th className="py-3 px-4">Gender</th>
@@ -304,8 +446,15 @@ export default function Students() {
                   </tr>
                 </thead>
                 <tbody>
-                  {groups[groupName].map((s) => (
+                  {groups[groupName].students.map((s) => (
                     <tr key={s.id} className="border-b border-line/60 hover:bg-line/10">
+                      <td className="py-2 px-4">
+                        {s.photo ? (
+                          <img src={s.photo} alt="" className="w-8 h-8 rounded-full object-cover" />
+                        ) : (
+                          <div className="w-8 h-8 rounded-full bg-line/40" />
+                        )}
+                      </td>
                       <td className="py-3 px-4 font-mono text-xs text-slate/60">{s.admissionNo}</td>
                       <td className="py-3 px-4 font-medium">
                         <Link to={`/students/${s.id}`} className="hover:underline text-ink">

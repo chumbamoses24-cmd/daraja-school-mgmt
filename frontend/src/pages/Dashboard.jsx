@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import client from "../api/client";
 import { useAuth } from "../context/AuthContext.jsx";
 
@@ -22,11 +23,13 @@ export default function Dashboard() {
   const [students, setStudents] = useState([]);
   const [invoices, setInvoices] = useState([]);
   const [messages, setMessages] = useState([]);
+  const [classRooms, setClassRooms] = useState([]);
 
   useEffect(() => {
     client.get("/students").then((r) => setStudents(r.data)).catch(() => {});
     if (user.role !== "TEACHER") client.get("/fees/invoices").then((r) => setInvoices(r.data)).catch(() => {});
     client.get("/messages/inbox").then((r) => setMessages(r.data)).catch(() => {});
+    if (user.role !== "PARENT") client.get("/students/classrooms").then((r) => setClassRooms(r.data)).catch(() => {});
   }, [user.role]);
 
   const unpaidCount = invoices.filter((i) => i.status !== "PAID").length;
@@ -47,6 +50,29 @@ export default function Dashboard() {
         <StatCard label="Unread Messages" value={unreadCount} tone={unreadCount ? "amber" : "moss"} />
         {user.role === "ADMIN" && <StatCard label="Role" value="Admin" />}
       </div>
+
+      {user.role !== "PARENT" && (
+        <div className="mb-8">
+          <h3 className="font-display text-lg font-semibold mb-4">Classes</h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+            {classRooms.map((c) => (
+              <Link
+                key={c.id}
+                to={`/classes/${c.id}`}
+                className="card p-5 hover:border-ink transition-colors block"
+              >
+                <p className="font-display text-lg font-semibold">{c.name}</p>
+                <p className="text-sm text-slate/50 mb-3">
+                  {c.teacher ? `${c.teacher.firstName} ${c.teacher.lastName}` : "No homeroom teacher"}
+                </p>
+                <p className="text-2xl font-display font-semibold text-ink">{c._count?.students ?? 0}</p>
+                <p className="text-xs uppercase tracking-wider text-slate/40 font-mono">students</p>
+              </Link>
+            ))}
+            {classRooms.length === 0 && <p className="text-slate/50 text-sm">No classes yet.</p>}
+          </div>
+        </div>
+      )}
 
       <div className="card p-6">
         <h3 className="font-display text-lg font-semibold mb-4">

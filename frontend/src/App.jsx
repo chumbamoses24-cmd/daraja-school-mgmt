@@ -5,6 +5,7 @@ import Profile from "./pages/Profile.jsx";
 import Dashboard from "./pages/Dashboard.jsx";
 import Students from "./pages/Students.jsx";
 import StudentProfile from "./pages/StudentProfile.jsx";
+import ClassAnalysis from "./pages/ClassAnalysis.jsx";
 import Attendance from "./pages/Attendance.jsx";
 import Grades from "./pages/Grades.jsx";
 import Fees from "./pages/Fees.jsx";
@@ -55,6 +56,14 @@ export default function App() {
       />
       <Route path="/students" element={<Page><Students /></Page>} />
       <Route path="/students/:id" element={<Page><StudentProfile /></Page>} />
+      <Route
+        path="/classes/:id"
+        element={
+          <ProtectedRoute roles={["ADMIN", "TEACHER"]}>
+            <Layout><ClassAnalysis /></Layout>
+          </ProtectedRoute>
+        }
+      />
       <Route path="/attendance" element={<Page><Attendance /></Page>} />
       <Route path="/grades" element={<Page><Grades /></Page>} />
       <Route
