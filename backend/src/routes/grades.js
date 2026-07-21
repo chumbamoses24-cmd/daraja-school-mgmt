@@ -3,17 +3,10 @@ const PDFDocument = require("pdfkit");
 const { z } = require("zod");
 const prisma = require("../lib/prisma");
 const { requireAuth, requireRole } = require("../middleware/auth");
+const { getGradingSystem, gradeForPercent } = require("../lib/grading");
 
 const router = express.Router();
 router.use(requireAuth);
-
-const letterGrade = (pct) => {
-  if (pct >= 80) return "A";
-  if (pct >= 70) return "B";
-  if (pct >= 60) return "C";
-  if (pct >= 50) return "D";
-  return "E";
-};
 
 // Shared builder used by both the JSON report-card route and the PDF route.
 // Throws { status, message } on not-found/forbidden so callers can respond appropriately.
@@ -25,13 +18,17 @@ async function buildReportCard(studentId, examId, requestUser) {
     }
   }
 
-  const [student, exam, grades] = await Promise.all([
+  const [student, exam, grades, bands] = await Promise.all([
     prisma.student.findUnique({ where: { id: studentId }, include: { classRoom: true } }),
     prisma.exam.findUnique({ where: { id: examId } }),
     prisma.grade.findMany({ where: { studentId, examId }, include: { subject: true } }),
+    getGradingSystem(),
   ]);
 
   if (!student || !exam) throw { status: 404, message: "Student or exam not found" };
+  if (requestUser.role === "PARENT" && !exam.published) {
+    throw { status: 403, message: "This exam's results haven't been published yet" };
+  }
 
   const totalScore = grades.reduce((sum, g) => sum + g.score, 0);
   const totalMax = grades.reduce((sum, g) => sum + g.maxScore, 0);
@@ -40,18 +37,59 @@ async function buildReportCard(studentId, examId, requestUser) {
   return {
     student: { id: student.id, name: `${student.firstName} ${student.lastName}`, admissionNo: student.admissionNo, classRoom: student.classRoom?.name },
     exam,
-    subjects: grades.map((g) => ({
-      subject: g.subject.name,
-      score: g.score,
-      maxScore: g.maxScore,
-      percentage: Number(((g.score / g.maxScore) * 100).toFixed(1)),
-      grade: letterGrade((g.score / g.maxScore) * 100),
-      remarks: g.remarks,
-    })),
+    subjects: grades.map((g) => {
+      const pct = (g.score / g.maxScore) * 100;
+      return {
+        subject: g.subject.name,
+        score: g.score,
+        maxScore: g.maxScore,
+        percentage: Number(pct.toFixed(1)),
+        grade: gradeForPercent(pct, bands).grade,
+        remarks: g.remarks,
+      };
+    }),
     average,
-    overallGrade: letterGrade(average),
+    overallGrade: gradeForPercent(average, bands).grade,
   };
 }
+
+// ---- Grading system ----
+router.get("/grading-system", async (req, res) => {
+  res.json(await getGradingSystem());
+});
+
+router.post("/grading-system", requireRole("ADMIN"), async (req, res) => {
+  const schema = z.object({
+    grade: z.string().min(1),
+    minPercent: z.number(),
+    maxPercent: z.number(),
+    points: z.number(),
+    order: z.number().optional(),
+  });
+  const parsed = schema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  const band = await prisma.gradeBand.create({ data: parsed.data });
+  res.status(201).json(band);
+});
+
+router.put("/grading-system/:id", requireRole("ADMIN"), async (req, res) => {
+  const schema = z.object({
+    grade: z.string().min(1).optional(),
+    minPercent: z.number().optional(),
+    maxPercent: z.number().optional(),
+    points: z.number().optional(),
+    order: z.number().optional(),
+  });
+  const parsed = schema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  const band = await prisma.gradeBand.update({ where: { id: Number(req.params.id) }, data: parsed.data });
+  res.json(band);
+});
+
+router.delete("/grading-system/:id", requireRole("ADMIN"), async (req, res) => {
+  await prisma.gradeBand.delete({ where: { id: Number(req.params.id) } });
+  res.status(204).end();
+});
 
 // ---- Subjects ----
 router.get("/subjects", async (req, res) => {
@@ -142,6 +180,7 @@ router.put("/exams/:id", requireRole("ADMIN"), async (req, res) => {
     name: z.string().min(1).optional(),
     term: z.number().optional(),
     year: z.number().optional(),
+    published: z.boolean().optional(),
   });
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
@@ -151,6 +190,20 @@ router.put("/exams/:id", requireRole("ADMIN"), async (req, res) => {
     include: { classRoom: { select: { name: true } } },
   });
   res.json(exam);
+});
+
+// Deleting an exam also removes any grades recorded against it.
+router.delete("/exams/:id", requireRole("ADMIN"), async (req, res) => {
+  const examId = Number(req.params.id);
+  const exam = await prisma.exam.findUnique({ where: { id: examId } });
+  if (!exam) return res.status(404).json({ error: "Exam not found" });
+
+  await prisma.$transaction([
+    prisma.grade.deleteMany({ where: { examId } }),
+    prisma.exam.delete({ where: { id: examId } }),
+  ]);
+
+  res.status(204).end();
 });
 
 // ---- Grades ----
@@ -215,6 +268,7 @@ router.get("/", async (req, res) => {
   if (req.user.role === "PARENT") {
     const children = await prisma.student.findMany({ where: { parentId: req.user.id }, select: { id: true } });
     where.studentId = { in: children.map((c) => c.id) };
+    where.exam = { published: true };
   }
 
   let grades = await prisma.grade.findMany({
@@ -368,6 +422,134 @@ router.get("/report-cards/class/:classRoomId/:examId/pdf", requireRole("ADMIN", 
   }
 
   doc.end();
+});
+
+// Comprehensive per-exam analysis: subject count, total marks, mean score/points, student
+// rankings by mean points (merit list), subject means & ranks, and grade distribution
+// (overall, per subject, and split by gender) — Zeraki-style exam analysis.
+router.get("/exam-analysis/:classRoomId/:examId", requireRole("ADMIN", "TEACHER"), async (req, res) => {
+  const classRoomId = Number(req.params.classRoomId);
+  const examId = Number(req.params.examId);
+
+  const [exam, students, grades, bands] = await Promise.all([
+    prisma.exam.findUnique({ where: { id: examId }, include: { classRoom: { select: { name: true, level: true, stream: true } } } }),
+    prisma.student.findMany({ where: { classRoomId }, orderBy: { admissionNo: "asc" } }),
+    prisma.grade.findMany({ where: { examId, student: { classRoomId } }, include: { subject: true, student: true } }),
+    getGradingSystem(),
+  ]);
+
+  if (!exam) return res.status(404).json({ error: "Exam not found" });
+
+  const subjectNames = [...new Set(grades.map((g) => g.subject.name))].sort();
+  const subjectCount = subjectNames.length;
+  const totalMarks = subjectNames.reduce((sum, name) => {
+    const oneGrade = grades.find((g) => g.subject.name === name);
+    return sum + (oneGrade ? oneGrade.maxScore : 100);
+  }, 0);
+
+  const gradeCount = () => Object.fromEntries(bands.map((b) => [b.grade, 0]));
+
+  // Per-subject aggregates: mean score, and grade distribution overall + by gender
+  const subjectStats = subjectNames.map((name) => {
+    const subjectGrades = grades.filter((g) => g.subject.name === name);
+    const total = subjectGrades.reduce((s, g) => s + g.score, 0);
+    const max = subjectGrades.reduce((s, g) => s + g.maxScore, 0);
+    const mean = max ? Number(((total / max) * 100).toFixed(1)) : 0;
+
+    const distribution = gradeCount();
+    const distributionByGender = { Male: gradeCount(), Female: gradeCount() };
+    subjectGrades.forEach((g) => {
+      const pct = (g.score / g.maxScore) * 100;
+      const { grade } = gradeForPercent(pct, bands);
+      distribution[grade] = (distribution[grade] || 0) + 1;
+      const genderKey = g.student.gender === "Female" ? "Female" : g.student.gender === "Male" ? "Male" : null;
+      if (genderKey) distributionByGender[genderKey][grade] = (distributionByGender[genderKey][grade] || 0) + 1;
+    });
+
+    return { subject: name, mean, distribution, distributionByGender };
+  });
+  subjectStats.sort((a, b) => b.mean - a.mean);
+  subjectStats.forEach((s, i) => (s.rank = i + 1));
+
+  // Per-student merit list: subject scores/grades, totals, points, mean points, position
+  const studentRows = students.map((s) => {
+    const sGrades = grades.filter((g) => g.studentId === s.id);
+    const subjects = subjectNames.map((name) => {
+      const g = sGrades.find((gr) => gr.subject.name === name);
+      if (!g) return { subject: name, score: null, maxScore: null, grade: null, points: null };
+      const pct = (g.score / g.maxScore) * 100;
+      const { grade, points } = gradeForPercent(pct, bands);
+      return { subject: name, score: g.score, maxScore: g.maxScore, grade, points };
+    });
+    const totalScore = sGrades.reduce((sum, g) => sum + g.score, 0);
+    const totalMax = sGrades.reduce((sum, g) => sum + g.maxScore, 0);
+    const meanScore = totalMax ? Number(((totalScore / totalMax) * 100).toFixed(1)) : null;
+    const totalPoints = subjects.reduce((sum, sub) => sum + (sub.points || 0), 0);
+    const gradedSubjectCount = subjects.filter((sub) => sub.points != null).length;
+    const meanPoints = gradedSubjectCount ? Number((totalPoints / gradedSubjectCount).toFixed(2)) : null;
+
+    return {
+      id: s.id,
+      admissionNo: s.admissionNo,
+      name: `${s.firstName} ${s.lastName}`,
+      gender: s.gender,
+      subjects,
+      totalScore,
+      meanScore,
+      totalPoints,
+      meanPoints,
+    };
+  });
+
+  // Rank by mean points (desc), students with no grades sink to the bottom
+  const ranked = [...studentRows].sort((a, b) => (b.meanPoints ?? -1) - (a.meanPoints ?? -1));
+  ranked.forEach((s, i) => (s.position = s.meanPoints != null ? i + 1 : null));
+
+  // Class-wide grade distribution, overall and by gender
+  const classDistribution = gradeCount();
+  const classDistributionByGender = { Male: gradeCount(), Female: gradeCount() };
+  grades.forEach((g) => {
+    const pct = (g.score / g.maxScore) * 100;
+    const { grade } = gradeForPercent(pct, bands);
+    classDistribution[grade] = (classDistribution[grade] || 0) + 1;
+    const genderKey = g.student.gender === "Female" ? "Female" : g.student.gender === "Male" ? "Male" : null;
+    if (genderKey) classDistributionByGender[genderKey][grade] = (classDistributionByGender[genderKey][grade] || 0) + 1;
+  });
+
+  const gradedStudents = studentRows.filter((s) => s.meanScore != null);
+  const classMeanScore = gradedStudents.length
+    ? Number((gradedStudents.reduce((s, st) => s + st.meanScore, 0) / gradedStudents.length).toFixed(1))
+    : null;
+  const classMeanPoints = gradedStudents.length
+    ? Number((gradedStudents.reduce((s, st) => s + (st.meanPoints || 0), 0) / gradedStudents.length).toFixed(2))
+    : null;
+
+  const boys = studentRows.filter((s) => s.gender === "Male" && s.meanScore != null);
+  const girls = studentRows.filter((s) => s.gender === "Female" && s.meanScore != null);
+  const genderComparison = {
+    boys: {
+      count: boys.length,
+      meanScore: boys.length ? Number((boys.reduce((s, b) => s + b.meanScore, 0) / boys.length).toFixed(1)) : null,
+    },
+    girls: {
+      count: girls.length,
+      meanScore: girls.length ? Number((girls.reduce((s, g) => s + g.meanScore, 0) / girls.length).toFixed(1)) : null,
+    },
+  };
+
+  res.json({
+    exam,
+    classRoom: exam.classRoom,
+    subjectCount,
+    totalMarks,
+    classMeanScore,
+    classMeanPoints,
+    classDistribution,
+    classDistributionByGender,
+    genderComparison,
+    subjects: subjectStats,
+    students: ranked,
+  });
 });
 
 module.exports = router;

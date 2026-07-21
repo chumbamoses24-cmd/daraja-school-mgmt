@@ -206,6 +206,78 @@ router.get("/classrooms/:id/pdf", requireRole("ADMIN", "TEACHER"), async (req, r
   doc.end();
 });
 
+// Printable mark sheet: Adm No, Name, Stream, and several blank ruled columns for a teacher to
+// record marks by hand. Landscape orientation to leave more room for the blank columns.
+router.get("/classrooms/:id/marksheet/pdf", requireRole("ADMIN", "TEACHER"), async (req, res) => {
+  const classRoomId = Number(req.params.id);
+  const classRoom = await prisma.classRoom.findUnique({ where: { id: classRoomId } });
+  if (!classRoom) return res.status(404).json({ error: "Class not found" });
+
+  const students = await prisma.student.findMany({
+    where: { classRoomId },
+    orderBy: { admissionNo: "asc" },
+  });
+
+  const fileName = `${classRoom.name.replace(/\s+/g, "-").toLowerCase()}-mark-sheet.pdf`;
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
+
+  const doc = new PDFDocument({ size: "A4", layout: "landscape", margin: 40 });
+  doc.pipe(res);
+
+  const inkColor = "#1B2A4A";
+  const slateColor = "#232323";
+  const lineColor = "#D9D4C6";
+  const pageWidth = doc.page.width - 80; // margins on both sides
+
+  doc.fillColor(inkColor).fontSize(20).font("Helvetica-Bold").text(classRoom.name, 40, 40);
+  doc.fillColor(slateColor).fontSize(9).font("Helvetica").text(`MARK SHEET — ${students.length} students`, 40, 65);
+  doc.moveTo(40, 84).lineTo(40 + pageWidth, 84).strokeColor(lineColor).lineWidth(1).stroke();
+
+  const BLANK_COLUMNS = 6;
+  const col = { no: 40, adm: 70, name: 150, stream: 320 };
+  const blankStartX = 390;
+  const blankWidth = (pageWidth - (blankStartX - 40)) / BLANK_COLUMNS;
+
+  let y = 100;
+  const headerHeight = 24;
+  doc.fillColor("#FFFFFF").rect(40, y, pageWidth, headerHeight).fill(inkColor);
+  doc.fillColor("#FFFFFF").fontSize(9).font("Helvetica-Bold");
+  doc.text("#", col.no + 5, y + 8);
+  doc.text("ADM NO", col.adm, y + 8);
+  doc.text("NAME", col.name, y + 8);
+  doc.text("STREAM", col.stream, y + 8);
+  for (let i = 0; i < BLANK_COLUMNS; i++) {
+    doc.text("", blankStartX + i * blankWidth, y + 8); // reserved, headers left blank for handwriting
+  }
+  y += headerHeight;
+
+  const rowHeight = 24;
+  doc.font("Helvetica").fontSize(9);
+  students.forEach((s, i) => {
+    if (y > doc.page.height - 60) {
+      doc.addPage();
+      y = 40;
+    }
+    if (i % 2 === 1) doc.fillColor("#F7F5EE").rect(40, y, pageWidth, rowHeight).fill();
+    doc.fillColor(slateColor);
+    doc.text(String(i + 1), col.no + 5, y + 7);
+    doc.text(s.admissionNo, col.adm, y + 7);
+    doc.text(`${s.firstName} ${s.lastName}`, col.name, y + 7, { width: 160 });
+    doc.text(classRoom.stream || classRoom.name, col.stream, y + 7, { width: 65 });
+
+    // Ruled blank columns for handwritten marks
+    for (let c = 0; c <= BLANK_COLUMNS; c++) {
+      const x = blankStartX + c * blankWidth;
+      doc.moveTo(x, y).lineTo(x, y + rowHeight).strokeColor(lineColor).lineWidth(0.5).stroke();
+    }
+    y += rowHeight;
+  });
+  doc.moveTo(40, y).lineTo(40 + pageWidth, y).strokeColor(lineColor).lineWidth(1).stroke();
+
+  doc.end();
+});
+
 // ---- Students / Admissions ----
 router.get("/", async (req, res) => {
   const { classRoomId, parentId } = req.query;

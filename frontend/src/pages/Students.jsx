@@ -196,6 +196,18 @@ export default function Students() {
     window.URL.revokeObjectURL(url);
   }
 
+  async function downloadMarkSheet(classRoomId, groupName) {
+    const res = await client.get(`/students/classrooms/${classRoomId}/marksheet/pdf`, { responseType: "blob" });
+    const url = window.URL.createObjectURL(new Blob([res.data], { type: "application/pdf" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${groupName.replace(/\s+/g, "-").toLowerCase()}-mark-sheet.pdf`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(url);
+  }
+
   return (
     <div>
       {user.role === "ADMIN" && (
@@ -428,6 +440,12 @@ export default function Students() {
                     onClick={() => downloadClassExcel(groupName, groups[groupName].students)}
                   >
                     Download Excel
+                  </button>
+                  <button
+                    className="text-xs text-ink underline underline-offset-2"
+                    onClick={() => downloadMarkSheet(groups[groupName].classRoomId, groupName)}
+                  >
+                    Download Mark Sheet
                   </button>
                 </div>
               )}

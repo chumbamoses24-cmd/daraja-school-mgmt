@@ -186,6 +186,27 @@ export default function Grades() {
     }
   }
 
+  async function handleDeleteExam(exam) {
+    if (!window.confirm(`Delete "${exam.name}" (Term ${exam.term}, ${exam.year})? This also deletes all grades recorded for this exam. This cannot be undone.`)) return;
+    try {
+      await client.delete(`/grades/exams/${exam.id}`);
+      refreshExams();
+    } catch (err) {
+      alert(err.response?.data?.error || "Could not delete exam");
+    }
+  }
+
+  async function handleTogglePublish(exam) {
+    const willPublish = !exam.published;
+    if (willPublish && !window.confirm(`Publish "${exam.name}"? Parents will be able to see results for this exam once published.`)) return;
+    try {
+      await client.put(`/grades/exams/${exam.id}`, { published: willPublish });
+      refreshExams();
+    } catch (err) {
+      alert(err.response?.data?.error || "Could not update publish status");
+    }
+  }
+
   const [excelError, setExcelError] = useState("");
   const [excelSummary, setExcelSummary] = useState("");
 
@@ -518,6 +539,7 @@ export default function Grades() {
                   <th className="py-2 px-4">Exam</th>
                   <th className="py-2 px-4">Term</th>
                   <th className="py-2 px-4">Year</th>
+                  <th className="py-2 px-4">Status</th>
                   {isAdmin && <th className="py-2 px-4"></th>}
                 </tr>
               </thead>
@@ -525,7 +547,7 @@ export default function Grades() {
                 {exams.map((ex) =>
                   editingExamId === ex.id ? (
                     <tr key={ex.id} className="border-b border-line/60 bg-line/10">
-                      <td colSpan={isAdmin ? 4 : 3} className="py-3 px-4">
+                      <td colSpan={isAdmin ? 5 : 4} className="py-3 px-4">
                         <form onSubmit={handleSaveExamEdit} className="flex gap-3 items-end flex-wrap">
                           <div>
                             <label className="block text-xs font-medium mb-1">Exam name</label>
@@ -554,10 +576,23 @@ export default function Grades() {
                       <td className="py-2 px-4">{ex.name}</td>
                       <td className="py-2 px-4">Term {ex.term}</td>
                       <td className="py-2 px-4">{ex.year}</td>
+                      <td className="py-2 px-4">
+                        {ex.published ? (
+                          <span className="pill border border-moss/30 bg-moss/10 text-moss">Published</span>
+                        ) : (
+                          <span className="pill border border-amber/30 bg-amber/10 text-amber">Draft</span>
+                        )}
+                      </td>
                       {isAdmin && (
-                        <td className="py-2 px-4">
-                          <button className="text-xs text-ink underline underline-offset-2" onClick={() => handleEditExam(ex)}>
+                        <td className="py-2 px-4 whitespace-nowrap">
+                          <button className="text-xs text-ink underline underline-offset-2 mr-3" onClick={() => handleEditExam(ex)}>
                             Edit
+                          </button>
+                          <button className="text-xs text-ink underline underline-offset-2 mr-3" onClick={() => handleTogglePublish(ex)}>
+                            {ex.published ? "Unpublish" : "Publish"}
+                          </button>
+                          <button className="text-xs text-rust underline underline-offset-2" onClick={() => handleDeleteExam(ex)}>
+                            Delete
                           </button>
                         </td>
                       )}
@@ -565,7 +600,7 @@ export default function Grades() {
                   )
                 )}
                 {exams.length === 0 && (
-                  <tr><td colSpan={isAdmin ? 4 : 3} className="py-4 px-4 text-center text-slate/50">No exams for this class yet.</td></tr>
+                  <tr><td colSpan={isAdmin ? 5 : 4} className="py-4 px-4 text-center text-slate/50">No exams for this class yet.</td></tr>
                 )}
               </tbody>
             </table>
