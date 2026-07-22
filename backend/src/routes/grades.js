@@ -424,13 +424,9 @@ router.get("/report-cards/class/:classRoomId/:examId/pdf", requireRole("ADMIN", 
   doc.end();
 });
 
-// Comprehensive per-exam analysis: subject count, total marks, mean score/points, student
-// rankings by mean points (merit list), subject means & ranks, and grade distribution
-// (overall, per subject, and split by gender) — Zeraki-style exam analysis.
-router.get("/exam-analysis/:classRoomId/:examId", requireRole("ADMIN", "TEACHER"), async (req, res) => {
-  const classRoomId = Number(req.params.classRoomId);
-  const examId = Number(req.params.examId);
-
+// Shared builder for exam analysis — used by the JSON route and all three downloadable PDFs below.
+// Throws { status, message } on not-found so callers can respond appropriately.
+async function buildExamAnalysis(classRoomId, examId) {
   const [exam, students, grades, bands] = await Promise.all([
     prisma.exam.findUnique({ where: { id: examId }, include: { classRoom: { select: { name: true, level: true, stream: true } } } }),
     prisma.student.findMany({ where: { classRoomId }, orderBy: { admissionNo: "asc" } }),
@@ -438,7 +434,7 @@ router.get("/exam-analysis/:classRoomId/:examId", requireRole("ADMIN", "TEACHER"
     getGradingSystem(),
   ]);
 
-  if (!exam) return res.status(404).json({ error: "Exam not found" });
+  if (!exam) throw { status: 404, message: "Exam not found" };
 
   const subjectNames = [...new Set(grades.map((g) => g.subject.name))].sort();
   const subjectCount = subjectNames.length;
@@ -537,7 +533,7 @@ router.get("/exam-analysis/:classRoomId/:examId", requireRole("ADMIN", "TEACHER"
     },
   };
 
-  res.json({
+  return {
     exam,
     classRoom: exam.classRoom,
     subjectCount,
@@ -549,7 +545,226 @@ router.get("/exam-analysis/:classRoomId/:examId", requireRole("ADMIN", "TEACHER"
     genderComparison,
     subjects: subjectStats,
     students: ranked,
+  };
+}
+
+// Comprehensive per-exam analysis: subject count, total marks, mean score/points, student
+// rankings by mean points (merit list), subject means & ranks, and grade distribution
+// (overall, per subject, and split by gender) — Zeraki-style exam analysis.
+router.get("/exam-analysis/:classRoomId/:examId", requireRole("ADMIN", "TEACHER"), async (req, res) => {
+  try {
+    const data = await buildExamAnalysis(Number(req.params.classRoomId), Number(req.params.examId));
+    res.json(data);
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    throw err;
+  }
+});
+
+// ---- Shared PDF drawing helpers ----
+const PDF_INK = "#1B2A4A";
+const PDF_MOSS = "#2F6B4F";
+const PDF_RUST = "#C1502E";
+const PDF_SLATE = "#232323";
+const PDF_LINE = "#D9D4C6";
+
+function drawPdfHeader(doc, title, subtitle, pageWidth, margin) {
+  doc.fillColor(PDF_INK).fontSize(20).font("Helvetica-Bold").text(title, margin, margin);
+  doc.fillColor(PDF_SLATE).fontSize(9).font("Helvetica").text(subtitle, margin, margin + 25);
+  doc.moveTo(margin, margin + 44).lineTo(margin + pageWidth, margin + 44).strokeColor(PDF_LINE).lineWidth(1).stroke();
+}
+
+// Downloadable merit list PDF — position, per-subject score+grade, totals, points.
+router.get("/exam-analysis/:classRoomId/:examId/merit-list/pdf", requireRole("ADMIN", "TEACHER"), async (req, res) => {
+  let data;
+  try {
+    data = await buildExamAnalysis(Number(req.params.classRoomId), Number(req.params.examId));
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    throw err;
+  }
+
+  const fileName = `${data.classRoom.name.replace(/\s+/g, "-").toLowerCase()}-merit-list.pdf`;
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
+
+  const margin = 30;
+  const doc = new PDFDocument({ size: "A4", layout: "landscape", margin });
+  doc.pipe(res);
+  const pageWidth = doc.page.width - margin * 2;
+
+  drawPdfHeader(doc, `${data.classRoom.name} — Merit List`, `${data.exam.name} — Term ${data.exam.term}, ${data.exam.year}`, pageWidth, margin);
+
+  const subjectColWidth = Math.min(70, (pageWidth - 260) / Math.max(data.subjectCount, 1));
+  const col = { pos: margin, adm: margin + 30, name: margin + 85, subjectsStart: margin + 220 };
+  let y = margin + 55;
+
+  function drawHeaderRow() {
+    doc.fillColor("#FFFFFF").rect(margin, y, pageWidth, 20).fill(PDF_INK);
+    doc.fillColor("#FFFFFF").fontSize(7).font("Helvetica-Bold");
+    doc.text("POS", col.pos + 2, y + 6);
+    doc.text("ADM NO", col.adm, y + 6);
+    doc.text("NAME", col.name, y + 6);
+    data.subjects.forEach((s, i) => {
+      doc.text(s.subject.slice(0, 10).toUpperCase(), col.subjectsStart + i * subjectColWidth, y + 6, { width: subjectColWidth - 2 });
+    });
+    const totalsX = col.subjectsStart + data.subjectCount * subjectColWidth;
+    doc.text("TOT", totalsX, y + 6);
+    doc.text("MEAN%", totalsX + 35, y + 6);
+    doc.text("PTS", totalsX + 75, y + 6);
+    doc.text("M.PTS", totalsX + 105, y + 6);
+    y += 20;
+  }
+
+  drawHeaderRow();
+  doc.font("Helvetica").fontSize(7.5);
+  data.students.forEach((s, i) => {
+    if (y > doc.page.height - 40) {
+      doc.addPage();
+      y = margin;
+      drawHeaderRow();
+      doc.font("Helvetica").fontSize(7.5);
+    }
+    const rowHeight = 16;
+    if (i % 2 === 1) doc.fillColor("#F7F5EE").rect(margin, y, pageWidth, rowHeight).fill();
+    doc.fillColor(PDF_SLATE);
+    doc.text(String(s.position ?? "—"), col.pos + 2, y + 4);
+    doc.text(s.admissionNo, col.adm, y + 4);
+    doc.text(s.name, col.name, y + 4, { width: 130 });
+    s.subjects.forEach((sub, j) => {
+      const text = sub.score != null ? `${sub.score}(${sub.grade})` : "—";
+      doc.text(text, col.subjectsStart + j * subjectColWidth, y + 4, { width: subjectColWidth - 2 });
+    });
+    const totalsX = col.subjectsStart + data.subjectCount * subjectColWidth;
+    doc.text(String(s.totalScore), totalsX, y + 4);
+    doc.text(s.meanScore != null ? `${s.meanScore}%` : "—", totalsX + 35, y + 4);
+    doc.text(String(s.totalPoints), totalsX + 75, y + 4);
+    doc.text(s.meanPoints != null ? String(s.meanPoints) : "—", totalsX + 105, y + 4);
+    y += rowHeight;
   });
+
+  doc.end();
+});
+
+// Downloadable subject analysis report PDF — every subject's mean, rank, and grade distribution.
+router.get("/exam-analysis/:classRoomId/:examId/subjects-report/pdf", requireRole("ADMIN", "TEACHER"), async (req, res) => {
+  let data;
+  try {
+    data = await buildExamAnalysis(Number(req.params.classRoomId), Number(req.params.examId));
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    throw err;
+  }
+
+  const fileName = `${data.classRoom.name.replace(/\s+/g, "-").toLowerCase()}-subject-analysis.pdf`;
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
+
+  const margin = 50;
+  const doc = new PDFDocument({ size: "A4", margin });
+  doc.pipe(res);
+  const pageWidth = doc.page.width - margin * 2;
+
+  drawPdfHeader(doc, `${data.classRoom.name} — Subject Analysis`, `${data.exam.name} — Term ${data.exam.term}, ${data.exam.year}`, pageWidth, margin);
+
+  let y = margin + 60;
+  doc.fillColor(PDF_SLATE).fontSize(10).font("Helvetica").text(
+    `Subjects: ${data.subjectCount}   ·   Total Marks: ${data.totalMarks}   ·   Class Mean: ${data.classMeanScore ?? "—"}%   ·   Class Mean Points: ${data.classMeanPoints ?? "—"}`,
+    margin,
+    y
+  );
+  y += 30;
+
+  data.subjects.forEach((s) => {
+    if (y > doc.page.height - 140) {
+      doc.addPage();
+      y = margin;
+    }
+    doc.fillColor(PDF_INK).fontSize(12).font("Helvetica-Bold").text(`#${s.rank}  ${s.subject}`, margin, y);
+    doc.fillColor(PDF_SLATE).fontSize(10).font("Helvetica").text(`Mean: ${s.mean}%`, margin + 350, y);
+    y += 18;
+
+    const gradeLine = Object.entries(s.distribution)
+      .filter(([, count]) => count > 0)
+      .map(([g, count]) => `${g}: ${count}`)
+      .join("   ");
+    doc.fontSize(9).fillColor(PDF_SLATE).text(gradeLine || "No grades recorded", margin, y, { width: pageWidth });
+    y += 14;
+
+    const boysLine = Object.entries(s.distributionByGender.Male).filter(([, c]) => c > 0).map(([g, c]) => `${g}:${c}`).join(" ");
+    const girlsLine = Object.entries(s.distributionByGender.Female).filter(([, c]) => c > 0).map(([g, c]) => `${g}:${c}`).join(" ");
+    doc.fontSize(8).fillColor("#666666").text(`Boys — ${boysLine || "none"}   |   Girls — ${girlsLine || "none"}`, margin, y);
+    y += 22;
+
+    doc.moveTo(margin, y).lineTo(margin + pageWidth, y).strokeColor(PDF_LINE).lineWidth(0.5).stroke();
+    y += 12;
+  });
+
+  if (data.subjects.length === 0) {
+    doc.fillColor(PDF_SLATE).fontSize(10).text("No grades recorded for this exam yet.", margin, y);
+  }
+
+  doc.end();
+});
+
+// Downloadable top 10 students PDF — position, name, mean score, points, mean points.
+router.get("/exam-analysis/:classRoomId/:examId/top10/pdf", requireRole("ADMIN", "TEACHER"), async (req, res) => {
+  let data;
+  try {
+    data = await buildExamAnalysis(Number(req.params.classRoomId), Number(req.params.examId));
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    throw err;
+  }
+
+  const top10 = data.students.filter((s) => s.position != null).slice(0, 10);
+
+  const fileName = `${data.classRoom.name.replace(/\s+/g, "-").toLowerCase()}-top-10.pdf`;
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
+
+  const margin = 50;
+  const doc = new PDFDocument({ size: "A4", margin });
+  doc.pipe(res);
+  const pageWidth = doc.page.width - margin * 2;
+
+  drawPdfHeader(doc, `${data.classRoom.name} — Top 10 Students`, `${data.exam.name} — Term ${data.exam.term}, ${data.exam.year}`, pageWidth, margin);
+
+  let y = margin + 60;
+  const col = { pos: margin, adm: margin + 40, name: margin + 130, total: margin + 300, mean: margin + 370, pts: margin + 440, mpts: margin + 490 };
+
+  doc.fillColor("#FFFFFF").rect(margin, y, pageWidth, 24).fill(PDF_INK);
+  doc.fillColor("#FFFFFF").fontSize(9).font("Helvetica-Bold");
+  doc.text("POS", col.pos + 5, y + 8);
+  doc.text("ADM NO", col.adm, y + 8);
+  doc.text("NAME", col.name, y + 8);
+  doc.text("TOTAL", col.total, y + 8);
+  doc.text("MEAN %", col.mean, y + 8);
+  doc.text("POINTS", col.pts, y + 8);
+  doc.text("M.PTS", col.mpts, y + 8);
+  y += 24;
+
+  doc.font("Helvetica").fontSize(10);
+  top10.forEach((s, i) => {
+    const rowHeight = 26;
+    if (i % 2 === 1) doc.fillColor("#F7F5EE").rect(margin, y, pageWidth, rowHeight).fill();
+    const posColor = s.position <= 3 ? PDF_MOSS : PDF_SLATE;
+    doc.fillColor(posColor).font("Helvetica-Bold").text(String(s.position), col.pos + 5, y + 8);
+    doc.fillColor(PDF_SLATE).font("Helvetica");
+    doc.text(s.admissionNo, col.adm, y + 8);
+    doc.text(s.name, col.name, y + 8, { width: 160 });
+    doc.text(String(s.totalScore), col.total, y + 8);
+    doc.text(s.meanScore != null ? `${s.meanScore}%` : "—", col.mean, y + 8);
+    doc.text(String(s.totalPoints), col.pts, y + 8);
+    doc.text(s.meanPoints != null ? String(s.meanPoints) : "—", col.mpts, y + 8);
+    y += rowHeight;
+  });
+
+  if (top10.length === 0) {
+    doc.fillColor(PDF_SLATE).fontSize(10).text("No graded students found for this exam.", margin, y);
+  }
+
+  doc.end();
 });
 
 module.exports = router;

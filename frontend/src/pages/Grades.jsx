@@ -19,6 +19,7 @@ export default function Grades() {
   const [subjectId, setSubjectId] = useState("");
   const [examId, setExamId] = useState("");
   const [scores, setScores] = useState({});
+  const [maxScore, setMaxScore] = useState("100");
   const [saved, setSaved] = useState(false);
 
   const [reportStudentId, setReportStudentId] = useState("");
@@ -211,7 +212,11 @@ export default function Grades() {
   const [excelSummary, setExcelSummary] = useState("");
 
   async function handleSaveScores() {
-    const records = Object.entries(scores).map(([studentId, score]) => ({ studentId: Number(studentId), score: Number(score) }));
+    const records = Object.entries(scores).map(([studentId, score]) => ({
+      studentId: Number(studentId),
+      score: Number(score),
+      maxScore: Number(maxScore) || 100,
+    }));
     await client.post("/grades", { examId: Number(examId), subjectId: Number(subjectId), records });
     setSaved(true);
     setTimeout(() => setSaved(false), 2500);
@@ -608,38 +613,58 @@ export default function Grades() {
 
           {examId && subjectId && (
             <div className="card overflow-x-auto">
-              <div className="p-4 border-b border-line flex items-center gap-3 flex-wrap">
+              <div className="p-4 border-b border-line flex items-center gap-4 flex-wrap">
                 <label className="btn-secondary text-sm cursor-pointer">
                   Upload scores from Excel
                   <input type="file" accept=".xlsx,.xls" className="hidden" onChange={handleExcelUpload} />
                 </label>
                 <span className="text-xs text-slate/40">Columns: "Admission No" and "Score"</span>
+                <div className="flex items-center gap-2 ml-auto">
+                  <label className="text-xs font-medium text-slate/60 whitespace-nowrap">Maximum mark</label>
+                  <input
+                    className="input w-20"
+                    type="number"
+                    min={1}
+                    value={maxScore}
+                    onChange={(e) => setMaxScore(e.target.value)}
+                  />
+                </div>
               </div>
               {excelError && <p className="text-rust text-sm px-4 pt-3">{excelError}</p>}
               {excelSummary && <p className="text-moss text-sm px-4 pt-3">{excelSummary}</p>}
               <table className="w-full text-sm">
                 <thead>
                   <tr className="text-left text-slate/50 uppercase text-xs tracking-wider border-b border-line bg-line/20">
+                    <th className="py-3 px-4 font-mono">Adm. No</th>
                     <th className="py-3 px-4">Student</th>
-                    <th className="py-3 px-4 w-40">Score / 100</th>
+                    <th className="py-3 px-4 w-32">Score / {maxScore || 100}</th>
+                    <th className="py-3 px-4 w-20">%</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {students.map((s) => (
-                    <tr key={s.id} className="border-b border-line/60">
-                      <td className="py-2 px-4">{s.firstName} {s.lastName}</td>
-                      <td className="py-2 px-4">
-                        <input
-                          className="input"
-                          type="number"
-                          min={0}
-                          max={100}
-                          value={scores[s.id] ?? ""}
-                          onChange={(e) => setScores({ ...scores, [s.id]: e.target.value })}
-                        />
-                      </td>
-                    </tr>
-                  ))}
+                  {students.map((s) => {
+                    const raw = scores[s.id];
+                    const pct = raw !== undefined && raw !== "" && Number(maxScore) > 0
+                      ? ((Number(raw) / Number(maxScore)) * 100).toFixed(1)
+                      : null;
+                    return (
+                      <tr key={s.id} className="border-b border-line/60">
+                        <td className="py-2 px-4 font-mono text-xs text-slate/60">{s.admissionNo}</td>
+                        <td className="py-2 px-4">{s.firstName} {s.lastName}</td>
+                        <td className="py-2 px-4">
+                          <input
+                            className="input"
+                            type="number"
+                            min={0}
+                            max={Number(maxScore) || 100}
+                            value={raw ?? ""}
+                            onChange={(e) => setScores({ ...scores, [s.id]: e.target.value })}
+                          />
+                        </td>
+                        <td className="py-2 px-4 text-slate/50 font-mono text-xs">{pct != null ? `${pct}%` : "—"}</td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
               <div className="p-4 flex items-center gap-3">

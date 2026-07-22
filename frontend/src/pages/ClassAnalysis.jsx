@@ -48,6 +48,20 @@ export default function ClassAnalysis() {
       .catch((err) => setExamAnalysisError(err.response?.data?.error || "Could not load exam analysis"));
   }, [id, examId]);
 
+  async function downloadExamPdf(kind, defaultName) {
+    const res = await client.get(`/grades/exam-analysis/${id}/${examId}/${kind}/pdf`, { responseType: "blob" });
+    const url = window.URL.createObjectURL(new Blob([res.data], { type: "application/pdf" }));
+    const link = document.createElement("a");
+    const disposition = res.headers["content-disposition"] || "";
+    const match = disposition.match(/filename="(.+)"/);
+    link.href = url;
+    link.download = match ? match[1] : defaultName;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(url);
+  }
+
   if (error) return <p className="text-rust">{error}</p>;
   if (!data) return <p className="text-slate/50">Loading…</p>;
 
@@ -97,6 +111,18 @@ export default function ClassAnalysis() {
 
         {examAnalysis && (
           <>
+            <div className="flex flex-wrap gap-3 mb-6">
+              <button className="btn-secondary text-sm" onClick={() => downloadExamPdf("merit-list", "merit-list.pdf")}>
+                Download Merit List
+              </button>
+              <button className="btn-secondary text-sm" onClick={() => downloadExamPdf("subjects-report", "subject-analysis.pdf")}>
+                Download Subject Analysis Report
+              </button>
+              <button className="btn-secondary text-sm" onClick={() => downloadExamPdf("top10", "top-10.pdf")}>
+                Download Top 10 Students
+              </button>
+            </div>
+
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
               <div className="card p-4">
                 <p className="text-xs uppercase tracking-wider text-slate/50 font-mono mb-1">Subjects</p>

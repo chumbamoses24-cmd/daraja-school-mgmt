@@ -293,7 +293,7 @@ router.get("/", async (req, res) => {
       classRoom: { select: { id: true, name: true, level: true } },
       parent: { select: { id: true, firstName: true, lastName: true, phone: true, email: true } },
     },
-    orderBy: { lastName: "asc" },
+    orderBy: { admissionNo: "asc" },
   });
   res.json(students);
 });
