@@ -20,10 +20,10 @@ router.post("/login", async (req, res) => {
   const user = await prisma.user.findFirst({
     where: { OR: [{ email: identifier }, { phone: identifier }] },
   });
-  if (!user) return res.status(401).json({ error: "Invalid credentials" });
+  if (!user) return res.status(401).json({ error: "No account found with that email or phone number" });
 
   const valid = await bcrypt.compare(password, user.password);
-  if (!valid) return res.status(401).json({ error: "Invalid credentials" });
+  if (!valid) return res.status(401).json({ error: "Incorrect password" });
 
   const token = jwt.sign(
     { id: user.id, role: user.role, email: user.email, firstName: user.firstName, lastName: user.lastName },
@@ -177,6 +177,24 @@ router.put("/users/:id", requireAuth, requireRole("ADMIN"), async (req, res) => 
     select: { id: true, email: true, role: true, firstName: true, lastName: true, phone: true, mustChangePassword: true },
   });
   res.json(user);
+});
+
+// Admin-driven password reset — e.g. when a user forgets their password and there's no email/SMS
+// service configured to send a self-service reset link. Generates a new temporary password the
+// admin shares directly; the user is forced to change it on next login.
+router.post("/users/:id/reset-password", requireAuth, requireRole("ADMIN"), async (req, res) => {
+  const userId = Number(req.params.id);
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  if (!user) return res.status(404).json({ error: "User not found" });
+
+  const tempPassword = Math.random().toString(36).slice(-8) + "A1";
+  const hashed = await bcrypt.hash(tempPassword, 10);
+  await prisma.user.update({
+    where: { id: userId },
+    data: { password: hashed, mustChangePassword: true },
+  });
+
+  res.json({ tempPassword });
 });
 
 // Deleting a user unlinks them from records that can survive without them (homeroom class,

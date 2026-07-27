@@ -11,6 +11,7 @@ export default function Login() {
   const [password, setPassword] = useState("password123");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [showForgot, setShowForgot] = useState(false);
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -46,6 +47,19 @@ export default function Login() {
           <button type="submit" disabled={loading} className="btn-primary w-full">
             {loading ? "Signing in…" : "Sign in"}
           </button>
+          <button
+            type="button"
+            onClick={() => setShowForgot((v) => !v)}
+            className="text-xs text-slate/50 hover:text-ink underline underline-offset-2 block mx-auto"
+          >
+            Forgot password?
+          </button>
+          {showForgot && (
+            <p className="text-xs text-slate/60 bg-line/20 rounded-sm p-3 leading-relaxed">
+              Ask your school admin to reset it for you — they can do this from the Users page, which
+              gives you a new temporary password. You'll be asked to set your own password the next time you sign in.
+            </p>
+          )}
         </form>
         <p className="text-xs text-slate/50 mt-4 text-center font-mono">
           Demo: admin@school.test · teacher1@school.test · parent1@school.test — password123

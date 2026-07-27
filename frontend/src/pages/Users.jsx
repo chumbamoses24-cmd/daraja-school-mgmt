@@ -48,6 +48,17 @@ export default function Users() {
     }
   }
 
+  async function handleResetPassword(u) {
+    if (!window.confirm(`Reset the password for ${u.firstName} ${u.lastName}? Their current password will stop working immediately.`)) return;
+    try {
+      const { data } = await client.post(`/auth/users/${u.id}/reset-password`);
+      setLastCreated({ identifier: u.email || u.phone, password: data.tempPassword, reset: true });
+      load();
+    } catch (err) {
+      alert(err.response?.data?.error || "Could not reset password");
+    }
+  }
+
   function startEdit(u) {
     setEditingId(u.id);
     setEditForm({ firstName: u.firstName, lastName: u.lastName, phone: u.phone || "", email: u.email || "", role: u.role });
@@ -78,10 +89,10 @@ export default function Users() {
       {lastCreated && (
         <div className="card p-4 mb-6 border-moss/40 bg-moss/5">
           <p className="text-sm">
-            Account created for <strong>{lastCreated.identifier}</strong>. Temporary password:{" "}
+            {lastCreated.reset ? "Password reset for" : "Account created for"} <strong>{lastCreated.identifier}</strong>. Temporary password:{" "}
             <span className="font-mono bg-white px-2 py-0.5 rounded border border-line">{lastCreated.password}</span>
           </p>
-          <p className="text-xs text-slate/50 mt-1">Share this with them directly — they'll be required to set their own password on first login.</p>
+          <p className="text-xs text-slate/50 mt-1">Share this with them directly — they'll be required to set their own password on next login.</p>
         </div>
       )}
 
@@ -187,6 +198,9 @@ export default function Users() {
                   <td className="py-3 px-4 whitespace-nowrap">
                     <button className="text-xs text-ink underline underline-offset-2 mr-3" onClick={() => startEdit(u)}>
                       Edit
+                    </button>
+                    <button className="text-xs text-ink underline underline-offset-2 mr-3" onClick={() => handleResetPassword(u)}>
+                      Reset password
                     </button>
                     <button className="text-xs text-rust underline underline-offset-2" onClick={() => handleDelete(u)}>
                       Delete

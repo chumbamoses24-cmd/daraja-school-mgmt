@@ -163,7 +163,8 @@ router.get("/exams", async (req, res) => {
   res.json(exams);
 });
 
-router.post("/exams", requireRole("ADMIN", "TEACHER"), async (req, res) => {
+// Only admins create exams — teachers work with exams an admin has already set up.
+router.post("/exams", requireRole("ADMIN"), async (req, res) => {
   const schema = z.object({
     name: z.string().min(1),
     term: z.number(),
@@ -206,6 +207,23 @@ router.delete("/exams/:id", requireRole("ADMIN"), async (req, res) => {
   res.status(204).end();
 });
 
+// Shared check: can this user enter/edit/delete grades for this subject in this exam's class?
+// Admins always can. Teachers can if they're the homeroom teacher of the class, or specifically
+// assigned to teach that subject in that class. Throws { status, message } if not allowed.
+async function assertCanGrade(examId, subjectId, user) {
+  if (user.role === "ADMIN") return;
+  const exam = await prisma.exam.findUnique({ where: { id: examId }, include: { classRoom: true } });
+  if (!exam) throw { status: 404, message: "Exam not found" };
+  const isHomeroomTeacher = exam.classRoom.teacherId === user.id;
+  if (isHomeroomTeacher) return;
+  const assignment = await prisma.classSubject.findUnique({
+    where: { classRoomId_subjectId: { classRoomId: exam.classRoomId, subjectId } },
+  });
+  if (!assignment || assignment.teacherId !== user.id) {
+    throw { status: 403, message: "You are not assigned to teach this subject for this class" };
+  }
+}
+
 // ---- Grades ----
 // Bulk enter grades for one subject across a class for a given exam
 const bulkGradeSchema = z.object({
@@ -226,18 +244,10 @@ router.post("/", requireRole("ADMIN", "TEACHER"), async (req, res) => {
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   const { examId, subjectId, records } = parsed.data;
 
-  if (req.user.role === "TEACHER") {
-    const exam = await prisma.exam.findUnique({ where: { id: examId }, include: { classRoom: true } });
-    if (!exam) return res.status(404).json({ error: "Exam not found" });
-    const isHomeroomTeacher = exam.classRoom.teacherId === req.user.id;
-    if (!isHomeroomTeacher) {
-      const assignment = await prisma.classSubject.findUnique({
-        where: { classRoomId_subjectId: { classRoomId: exam.classRoomId, subjectId } },
-      });
-      if (!assignment || assignment.teacherId !== req.user.id) {
-        return res.status(403).json({ error: "You are not assigned to teach this subject for this class" });
-      }
-    }
+  try {
+    await assertCanGrade(examId, subjectId, req.user);
+  } catch (err) {
+    return res.status(err.status || 500).json({ error: err.message || "Could not verify permissions" });
   }
 
   const results = await Promise.all(
@@ -257,6 +267,69 @@ router.post("/", requireRole("ADMIN", "TEACHER"), async (req, res) => {
     )
   );
   res.status(201).json(results);
+});
+
+// Bulk delete grades for one or more students, for a given exam/subject — e.g. a mark entered
+// for the wrong student. Requires the same grading permission as entering marks.
+const bulkDeleteSchema = z.object({
+  examId: z.number(),
+  subjectId: z.number(),
+  studentIds: z.array(z.number()).min(1),
+});
+
+router.delete("/", requireRole("ADMIN", "TEACHER"), async (req, res) => {
+  const parsed = bulkDeleteSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  const { examId, subjectId, studentIds } = parsed.data;
+
+  try {
+    await assertCanGrade(examId, subjectId, req.user);
+  } catch (err) {
+    return res.status(err.status || 500).json({ error: err.message || "Could not verify permissions" });
+  }
+
+  const result = await prisma.grade.deleteMany({
+    where: { examId, subjectId, studentId: { in: studentIds } },
+  });
+  res.json({ deleted: result.count });
+});
+
+// For a given class + exam: every subject assigned to that class, with how many students in the
+// class already have a grade recorded — powers the "uploaded / not uploaded" subject list.
+router.get("/upload-status/:classRoomId/:examId", requireRole("ADMIN", "TEACHER"), async (req, res) => {
+  const classRoomId = Number(req.params.classRoomId);
+  const examId = Number(req.params.examId);
+
+  const [totalStudents, assignments, grades] = await Promise.all([
+    prisma.student.count({ where: { classRoomId } }),
+    prisma.classSubject.findMany({
+      where: { classRoomId },
+      include: { subject: true, teacher: { select: { id: true, firstName: true, lastName: true } } },
+    }),
+    prisma.grade.groupBy({ by: ["subjectId"], where: { examId, student: { classRoomId } }, _count: { id: true } }),
+  ]);
+
+  const gradedCountBySubject = Object.fromEntries(grades.map((g) => [g.subjectId, g._count.id]));
+
+  let subjects;
+  if (req.user.role === "TEACHER") {
+    const classRoom = await prisma.classRoom.findUnique({ where: { id: classRoomId } });
+    const isHomeroomTeacher = classRoom?.teacherId === req.user.id;
+    subjects = isHomeroomTeacher ? assignments : assignments.filter((a) => a.teacherId === req.user.id);
+  } else {
+    subjects = assignments;
+  }
+
+  res.json(
+    subjects.map((a) => ({
+      subjectId: a.subject.id,
+      subjectName: a.subject.name,
+      teacher: a.teacher ? `${a.teacher.firstName} ${a.teacher.lastName}` : null,
+      gradedCount: gradedCountBySubject[a.subject.id] || 0,
+      totalStudents,
+      uploaded: (gradedCountBySubject[a.subject.id] || 0) > 0,
+    }))
+  );
 });
 
 router.get("/", async (req, res) => {

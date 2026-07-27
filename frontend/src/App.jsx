@@ -13,6 +13,8 @@ import Timetable from "./pages/Timetable.jsx";
 import Messages from "./pages/Messages.jsx";
 import Users from "./pages/Users.jsx";
 import Settings from "./pages/Settings.jsx";
+import ExamsOverview from "./pages/ExamsOverview.jsx";
+import SubjectStatus from "./pages/SubjectStatus.jsx";
 import Layout from "./components/Layout.jsx";
 import ProtectedRoute from "./components/ProtectedRoute.jsx";
 
@@ -79,6 +81,22 @@ export default function App() {
         element={
           <ProtectedRoute roles={["ADMIN", "TEACHER"]}>
             <Layout><Timetable /></Layout>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/exams"
+        element={
+          <ProtectedRoute roles={["ADMIN"]}>
+            <Layout><ExamsOverview /></Layout>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/marks/:classRoomId/:examId"
+        element={
+          <ProtectedRoute roles={["ADMIN", "TEACHER"]}>
+            <Layout><SubjectStatus /></Layout>
           </ProtectedRoute>
         }
       />

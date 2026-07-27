@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useParams, Link } from "react-router-dom";
+import { useParams, useSearchParams, Link } from "react-router-dom";
 import client from "../api/client";
 
 function GradeDistributionTable({ distribution }) {
@@ -19,6 +19,7 @@ function GradeDistributionTable({ distribution }) {
 
 export default function ClassAnalysis() {
   const { id } = useParams();
+  const [searchParams] = useSearchParams();
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
 
@@ -27,6 +28,7 @@ export default function ClassAnalysis() {
   const [examAnalysis, setExamAnalysis] = useState(null);
   const [examAnalysisError, setExamAnalysisError] = useState("");
   const [showGenderSplit, setShowGenderSplit] = useState(false);
+  const [subjectStatus, setSubjectStatus] = useState([]);
 
   useEffect(() => {
     client
@@ -35,7 +37,9 @@ export default function ClassAnalysis() {
       .catch((err) => setError(err.response?.data?.error || "Could not load class analysis"));
     client.get(`/grades/exams?classRoomId=${id}`).then((r) => {
       setExams(r.data);
-      if (r.data.length) setExamId(String(r.data[0].id));
+      const paramExamId = searchParams.get("examId");
+      if (paramExamId && r.data.some((ex) => String(ex.id) === paramExamId)) setExamId(paramExamId);
+      else if (r.data.length) setExamId(String(r.data[0].id));
     });
   }, [id]);
 
@@ -46,6 +50,7 @@ export default function ClassAnalysis() {
       .get(`/grades/exam-analysis/${id}/${examId}`)
       .then((r) => setExamAnalysis(r.data))
       .catch((err) => setExamAnalysisError(err.response?.data?.error || "Could not load exam analysis"));
+    client.get(`/grades/upload-status/${id}/${examId}`).then((r) => setSubjectStatus(r.data)).catch(() => setSubjectStatus([]));
   }, [id, examId]);
 
   async function downloadExamPdf(kind, defaultName) {
@@ -107,6 +112,51 @@ export default function ClassAnalysis() {
         </div>
 
         {exams.length === 0 && <p className="text-slate/50 text-sm">No exams recorded for this class yet.</p>}
+
+        {examId && (
+          <div className="card overflow-x-auto mb-6">
+            <h4 className="font-display text-base font-semibold p-4 pb-0">Manage marks by subject</h4>
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-slate/50 uppercase text-xs tracking-wider border-b border-line bg-line/20 mt-2">
+                  <th className="py-2 px-4">Subject</th>
+                  <th className="py-2 px-4">Teacher</th>
+                  <th className="py-2 px-4">Status</th>
+                  <th className="py-2 px-4"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {subjectStatus.map((s) => (
+                  <tr key={s.subjectId} className="border-b border-line/60">
+                    <td className="py-2 px-4">{s.subjectName}</td>
+                    <td className="py-2 px-4 text-slate/60">{s.teacher || "Unassigned"}</td>
+                    <td className="py-2 px-4">
+                      {s.uploaded ? (
+                        <span className="pill border border-moss/30 bg-moss/10 text-moss">
+                          Uploaded ({s.gradedCount}/{s.totalStudents})
+                        </span>
+                      ) : (
+                        <span className="pill border border-amber/30 bg-amber/10 text-amber">Not uploaded</span>
+                      )}
+                    </td>
+                    <td className="py-2 px-4">
+                      <Link
+                        to={`/grades?classRoomId=${id}&examId=${examId}&subjectId=${s.subjectId}`}
+                        className="text-xs text-ink underline underline-offset-2"
+                      >
+                        {s.uploaded ? "View / Edit marks" : "Upload marks"}
+                      </Link>
+                    </td>
+                  </tr>
+                ))}
+                {subjectStatus.length === 0 && (
+                  <tr><td colSpan={4} className="py-4 px-4 text-center text-slate/50">No subjects assigned to this class yet.</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
+
         {examAnalysisError && <p className="text-rust text-sm">{examAnalysisError}</p>}
 
         {examAnalysis && (

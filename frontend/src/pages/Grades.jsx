@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import * as XLSX from "xlsx";
 import client from "../api/client";
 import { useAuth } from "../context/AuthContext.jsx";
@@ -7,6 +8,7 @@ export default function Grades() {
   const { user } = useAuth();
   const canEnter = user.role === "ADMIN" || user.role === "TEACHER";
   const isAdmin = user.role === "ADMIN";
+  const [searchParams] = useSearchParams();
 
   const [classRooms, setClassRooms] = useState([]);
   const [subjects, setSubjects] = useState([]);
@@ -46,11 +48,17 @@ export default function Grades() {
   useEffect(() => {
     client.get("/students/classrooms").then((r) => {
       setClassRooms(r.data);
-      if (r.data.length) setClassRoomId(String(r.data[0].id));
+      const paramClassRoomId = searchParams.get("classRoomId");
+      if (paramClassRoomId) setClassRoomId(paramClassRoomId);
+      else if (r.data.length) setClassRoomId(String(r.data[0].id));
     });
     refreshSubjects();
     client.get("/students").then((r) => setStudents(r.data));
     if (isAdmin) client.get("/auth/users?role=TEACHER").then((r) => setTeachers(r.data)).catch(() => {});
+    const paramExamId = searchParams.get("examId");
+    const paramSubjectId = searchParams.get("subjectId");
+    if (paramExamId) setExamId(paramExamId);
+    if (paramSubjectId) setSubjectId(paramSubjectId);
   }, []);
 
   useEffect(() => {
@@ -211,6 +219,87 @@ export default function Grades() {
   const [excelError, setExcelError] = useState("");
   const [excelSummary, setExcelSummary] = useState("");
 
+  // Marks workflow: once an exam+subject is picked, show a ranked (read-only) view if marks already
+  // exist, or jump straight into entry if nothing's been uploaded yet. "Actions" switches between modes.
+  const [markMode, setMarkMode] = useState(null); // "ranked" | "add" | "edit" | "delete"
+  const [existingGrades, setExistingGrades] = useState([]);
+  const [showActionsMenu, setShowActionsMenu] = useState(false);
+  const [deleteSelection, setDeleteSelection] = useState(new Set());
+  const [deleteError, setDeleteError] = useState("");
+
+  function refreshExistingGrades() {
+    if (!examId || !subjectId) {
+      setExistingGrades([]);
+      return;
+    }
+    client.get(`/grades?examId=${examId}`).then((r) => {
+      const forSubject = r.data.filter((g) => g.subject.id === Number(subjectId));
+      setExistingGrades(forSubject);
+      setMarkMode(forSubject.length > 0 ? "ranked" : "add");
+      setScores({});
+      setDeleteSelection(new Set());
+    });
+  }
+
+  useEffect(() => {
+    refreshExistingGrades();
+  }, [examId, subjectId]);
+
+  const rankedGrades = [...existingGrades].sort((a, b) => b.score - a.score);
+  const gradedStudentIds = new Set(existingGrades.map((g) => g.student.id));
+  const studentsMissingMarks = students.filter((s) => !gradedStudentIds.has(s.id));
+
+  function startAddMode() {
+    setMarkMode("add");
+    setScores({});
+    setShowActionsMenu(false);
+  }
+  function startEditMode() {
+    setMarkMode("edit");
+    const prefill = {};
+    existingGrades.forEach((g) => (prefill[g.student.id] = g.score));
+    setScores(prefill);
+    setShowActionsMenu(false);
+  }
+  function startDeleteMode() {
+    setMarkMode("delete");
+    setDeleteSelection(new Set());
+    setDeleteError("");
+    setShowActionsMenu(false);
+  }
+  function backToRanked() {
+    setMarkMode(existingGrades.length > 0 ? "ranked" : "add");
+    setScores({});
+  }
+
+  function toggleDeleteSelection(studentId) {
+    setDeleteSelection((prev) => {
+      const next = new Set(prev);
+      if (next.has(studentId)) next.delete(studentId);
+      else next.add(studentId);
+      return next;
+    });
+  }
+  function toggleSelectAllForDelete() {
+    setDeleteSelection((prev) =>
+      prev.size === existingGrades.length ? new Set() : new Set(existingGrades.map((g) => g.student.id))
+    );
+  }
+
+  async function handleDeleteMarks() {
+    if (deleteSelection.size === 0) return;
+    if (!window.confirm(`Delete marks for ${deleteSelection.size} student(s) in this subject? This cannot be undone.`)) return;
+    setDeleteError("");
+    try {
+      await client.delete("/grades", {
+        data: { examId: Number(examId), subjectId: Number(subjectId), studentIds: [...deleteSelection] },
+      });
+      refreshExistingGrades();
+    } catch (err) {
+      setDeleteError(err.response?.data?.error || "Could not delete marks");
+    }
+  }
+
   async function handleSaveScores() {
     const records = Object.entries(scores).map(([studentId, score]) => ({
       studentId: Number(studentId),
@@ -219,6 +308,7 @@ export default function Grades() {
     }));
     await client.post("/grades", { examId: Number(examId), subjectId: Number(subjectId), records });
     setSaved(true);
+    refreshExistingGrades();
     setTimeout(() => setSaved(false), 2500);
   }
 
@@ -263,6 +353,7 @@ export default function Grades() {
         }
       });
       setScores(newScores);
+      setMarkMode("edit");
       setExcelSummary(
         `Loaded ${matched} score(s) from the file.` +
           (unmatched.length ? ` Could not match: ${unmatched.slice(0, 5).join(", ")}${unmatched.length > 5 ? "…" : ""}` : " Review below, then click Save scores.")
@@ -461,19 +552,21 @@ export default function Grades() {
               <option value="">Select subject</option>
               {availableSubjects.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
             </select>
-            <button
-              className="btn-secondary whitespace-nowrap"
-              onClick={() => {
-                if (showExamForm) {
-                  setShowExamForm(false);
-                } else {
-                  setExamForm((f) => ({ ...f, classRoomIds: classRoomId ? [Number(classRoomId)] : [] }));
-                  setShowExamForm(true);
-                }
-              }}
-            >
-              {showExamForm ? "Cancel" : "+ New exam"}
-            </button>
+            {isAdmin && (
+              <button
+                className="btn-secondary whitespace-nowrap"
+                onClick={() => {
+                  if (showExamForm) {
+                    setShowExamForm(false);
+                  } else {
+                    setExamForm((f) => ({ ...f, classRoomIds: classRoomId ? [Number(classRoomId)] : [] }));
+                    setShowExamForm(true);
+                  }
+                }}
+              >
+                {showExamForm ? "Cancel" : "+ New exam"}
+              </button>
+            )}
           </div>
           {!isAdmin && availableSubjects.length === 0 && (
             <p className="text-slate/50 text-sm mb-4">You haven't been assigned any subjects for this class yet — ask an admin to assign you one.</p>
@@ -611,68 +704,197 @@ export default function Grades() {
             </table>
           </div>
 
-          {examId && subjectId && (
-            <div className="card overflow-x-auto">
-              <div className="p-4 border-b border-line flex items-center gap-4 flex-wrap">
-                <label className="btn-secondary text-sm cursor-pointer">
-                  Upload scores from Excel
-                  <input type="file" accept=".xlsx,.xls" className="hidden" onChange={handleExcelUpload} />
-                </label>
-                <span className="text-xs text-slate/40">Columns: "Admission No" and "Score"</span>
-                <div className="flex items-center gap-2 ml-auto">
-                  <label className="text-xs font-medium text-slate/60 whitespace-nowrap">Maximum mark</label>
-                  <input
-                    className="input w-20"
-                    type="number"
-                    min={1}
-                    value={maxScore}
-                    onChange={(e) => setMaxScore(e.target.value)}
-                  />
+          {examId && subjectId && (() => {
+            const selectedExam = exams.find((ex) => String(ex.id) === examId);
+            return (
+              <div>
+                <div className="flex items-center gap-3 mb-4 flex-wrap">
+                  <div className="relative">
+                    <button className="btn-secondary text-sm" onClick={() => setShowActionsMenu((v) => !v)}>
+                      Actions ▾
+                    </button>
+                    {showActionsMenu && (
+                      <div className="absolute z-10 mt-1 w-44 card p-1 shadow-lg">
+                        <button className="w-full text-left text-sm px-3 py-2 rounded hover:bg-line/20" onClick={startAddMode}>
+                          Add marks
+                        </button>
+                        <button className="w-full text-left text-sm px-3 py-2 rounded hover:bg-line/20" onClick={startEditMode}>
+                          Edit marks
+                        </button>
+                        <button className="w-full text-left text-sm px-3 py-2 rounded hover:bg-line/20 text-rust" onClick={startDeleteMode}>
+                          Delete marks
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                  {isAdmin && selectedExam && (
+                    <button className="btn-secondary text-sm" onClick={() => handleTogglePublish(selectedExam)}>
+                      {selectedExam.published ? "Unpublish exam" : "Publish exam"}
+                    </button>
+                  )}
+                  {selectedExam?.published && <span className="pill border border-moss/30 bg-moss/10 text-moss">Published</span>}
+                  {markMode !== "ranked" && existingGrades.length > 0 && (
+                    <button className="text-xs text-slate/50 underline underline-offset-2 ml-auto" onClick={backToRanked}>
+                      Back to ranked view
+                    </button>
+                  )}
                 </div>
+
+                {/* ---- Ranked (read-only) view ---- */}
+                {markMode === "ranked" && (
+                  <div className="card overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="text-left text-slate/50 uppercase text-xs tracking-wider border-b border-line bg-line/20">
+                          <th className="py-3 px-4">#</th>
+                          <th className="py-3 px-4 font-mono">Adm. No</th>
+                          <th className="py-3 px-4">Student</th>
+                          <th className="py-3 px-4">Score</th>
+                          <th className="py-3 px-4">%</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {rankedGrades.map((g, i) => (
+                          <tr key={g.id} className="border-b border-line/60">
+                            <td className="py-2 px-4 font-mono text-xs text-slate/40">{i + 1}</td>
+                            <td className="py-2 px-4 font-mono text-xs text-slate/60">{g.student.admissionNo}</td>
+                            <td className="py-2 px-4">{g.student.firstName} {g.student.lastName}</td>
+                            <td className="py-2 px-4 font-mono">{g.score}/{g.maxScore}</td>
+                            <td className="py-2 px-4 font-mono text-slate/60">{((g.score / g.maxScore) * 100).toFixed(1)}%</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {studentsMissingMarks.length > 0 && (
+                      <p className="text-xs text-amber px-4 py-3 border-t border-line">
+                        {studentsMissingMarks.length} student(s) still missing marks — use Actions → Add marks.
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {/* ---- Delete mode ---- */}
+                {markMode === "delete" && (
+                  <div className="card overflow-x-auto">
+                    <div className="p-4 border-b border-line flex items-center justify-between">
+                      <label className="flex items-center gap-2 text-sm">
+                        <input
+                          type="checkbox"
+                          checked={deleteSelection.size === existingGrades.length && existingGrades.length > 0}
+                          onChange={toggleSelectAllForDelete}
+                        />
+                        Select all
+                      </label>
+                      <button
+                        className="btn-secondary text-sm text-rust border-rust/40"
+                        disabled={deleteSelection.size === 0}
+                        onClick={handleDeleteMarks}
+                      >
+                        Delete selected ({deleteSelection.size})
+                      </button>
+                    </div>
+                    {deleteError && <p className="text-rust text-sm px-4 pt-3">{deleteError}</p>}
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="text-left text-slate/50 uppercase text-xs tracking-wider border-b border-line bg-line/20">
+                          <th className="py-3 px-4"></th>
+                          <th className="py-3 px-4 font-mono">Adm. No</th>
+                          <th className="py-3 px-4">Student</th>
+                          <th className="py-3 px-4">Score</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {existingGrades.map((g) => (
+                          <tr key={g.id} className="border-b border-line/60">
+                            <td className="py-2 px-4">
+                              <input
+                                type="checkbox"
+                                checked={deleteSelection.has(g.student.id)}
+                                onChange={() => toggleDeleteSelection(g.student.id)}
+                              />
+                            </td>
+                            <td className="py-2 px-4 font-mono text-xs text-slate/60">{g.student.admissionNo}</td>
+                            <td className="py-2 px-4">{g.student.firstName} {g.student.lastName}</td>
+                            <td className="py-2 px-4 font-mono">{g.score}/{g.maxScore}</td>
+                          </tr>
+                        ))}
+                        {existingGrades.length === 0 && (
+                          <tr><td colSpan={4} className="py-6 text-center text-slate/50">No marks recorded yet for this subject.</td></tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+                {/* ---- Add / Edit entry mode ---- */}
+                {(markMode === "add" || markMode === "edit") && (
+                  <div className="card overflow-x-auto">
+                    <div className="p-4 border-b border-line flex items-center gap-4 flex-wrap">
+                      <label className="btn-secondary text-sm cursor-pointer">
+                        Upload scores from Excel
+                        <input type="file" accept=".xlsx,.xls" className="hidden" onChange={handleExcelUpload} />
+                      </label>
+                      <span className="text-xs text-slate/40">Columns: "Admission No" and "Score"</span>
+                      <div className="flex items-center gap-2 ml-auto">
+                        <label className="text-xs font-medium text-slate/60 whitespace-nowrap">Maximum mark</label>
+                        <input
+                          className="input w-20"
+                          type="number"
+                          min={1}
+                          value={maxScore}
+                          onChange={(e) => setMaxScore(e.target.value)}
+                        />
+                      </div>
+                    </div>
+                    {excelError && <p className="text-rust text-sm px-4 pt-3">{excelError}</p>}
+                    {excelSummary && <p className="text-moss text-sm px-4 pt-3">{excelSummary}</p>}
+                    {markMode === "add" && studentsMissingMarks.length === 0 && (
+                      <p className="text-sm text-slate/50 px-4 pt-3">Every student already has a mark for this subject — use Edit marks instead.</p>
+                    )}
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="text-left text-slate/50 uppercase text-xs tracking-wider border-b border-line bg-line/20">
+                          <th className="py-3 px-4 font-mono">Adm. No</th>
+                          <th className="py-3 px-4">Student</th>
+                          <th className="py-3 px-4 w-32">Score / {maxScore || 100}</th>
+                          <th className="py-3 px-4 w-20">%</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(markMode === "add" ? studentsMissingMarks : students).map((s) => {
+                          const raw = scores[s.id];
+                          const pct = raw !== undefined && raw !== "" && Number(maxScore) > 0
+                            ? ((Number(raw) / Number(maxScore)) * 100).toFixed(1)
+                            : null;
+                          return (
+                            <tr key={s.id} className="border-b border-line/60">
+                              <td className="py-2 px-4 font-mono text-xs text-slate/60">{s.admissionNo}</td>
+                              <td className="py-2 px-4">{s.firstName} {s.lastName}</td>
+                              <td className="py-2 px-4">
+                                <input
+                                  className="input"
+                                  type="number"
+                                  min={0}
+                                  max={Number(maxScore) || 100}
+                                  value={raw ?? ""}
+                                  onChange={(e) => setScores({ ...scores, [s.id]: e.target.value })}
+                                />
+                              </td>
+                              <td className="py-2 px-4 text-slate/50 font-mono text-xs">{pct != null ? `${pct}%` : "—"}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                    <div className="p-4 flex items-center gap-3">
+                      <button className="btn-primary" onClick={handleSaveScores}>Save scores</button>
+                      {saved && <span className="text-moss text-sm">Saved.</span>}
+                    </div>
+                  </div>
+                )}
               </div>
-              {excelError && <p className="text-rust text-sm px-4 pt-3">{excelError}</p>}
-              {excelSummary && <p className="text-moss text-sm px-4 pt-3">{excelSummary}</p>}
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-left text-slate/50 uppercase text-xs tracking-wider border-b border-line bg-line/20">
-                    <th className="py-3 px-4 font-mono">Adm. No</th>
-                    <th className="py-3 px-4">Student</th>
-                    <th className="py-3 px-4 w-32">Score / {maxScore || 100}</th>
-                    <th className="py-3 px-4 w-20">%</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {students.map((s) => {
-                    const raw = scores[s.id];
-                    const pct = raw !== undefined && raw !== "" && Number(maxScore) > 0
-                      ? ((Number(raw) / Number(maxScore)) * 100).toFixed(1)
-                      : null;
-                    return (
-                      <tr key={s.id} className="border-b border-line/60">
-                        <td className="py-2 px-4 font-mono text-xs text-slate/60">{s.admissionNo}</td>
-                        <td className="py-2 px-4">{s.firstName} {s.lastName}</td>
-                        <td className="py-2 px-4">
-                          <input
-                            className="input"
-                            type="number"
-                            min={0}
-                            max={Number(maxScore) || 100}
-                            value={raw ?? ""}
-                            onChange={(e) => setScores({ ...scores, [s.id]: e.target.value })}
-                          />
-                        </td>
-                        <td className="py-2 px-4 text-slate/50 font-mono text-xs">{pct != null ? `${pct}%` : "—"}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-              <div className="p-4 flex items-center gap-3">
-                <button className="btn-primary" onClick={handleSaveScores}>Save scores</button>
-                {saved && <span className="text-moss text-sm">Saved.</span>}
-              </div>
-            </div>
-          )}
+            );
+          })()}
         </div>
       )}
 
