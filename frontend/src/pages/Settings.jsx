@@ -5,11 +5,57 @@ import { useSchool } from "../context/SchoolContext.jsx";
 const emptyBandForm = { grade: "", minPercent: "", maxPercent: "", points: "" };
 
 export default function Settings() {
-  const { schoolName, refreshSchool } = useSchool();
+  const { schoolName, logo, refreshSchool } = useSchool();
   const [name, setName] = useState(schoolName);
   const [error, setError] = useState("");
   const [saved, setSaved] = useState(false);
   const [loading, setLoading] = useState(false);
+
+  const [logoPreview, setLogoPreview] = useState(logo);
+  const [logoError, setLogoError] = useState("");
+  const [logoSaving, setLogoSaving] = useState(false);
+
+  useEffect(() => setLogoPreview(logo), [logo]);
+
+  function handleLogoFile(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 1024 * 1024) {
+      setLogoError("Please choose an image under 1MB.");
+      return;
+    }
+    setLogoError("");
+    const reader = new FileReader();
+    reader.onload = () => setLogoPreview(reader.result);
+    reader.readAsDataURL(file);
+  }
+
+  async function handleSaveLogo() {
+    setLogoError("");
+    setLogoSaving(true);
+    try {
+      await client.put("/settings", { logo: logoPreview });
+      refreshSchool();
+    } catch (err) {
+      setLogoError(err.response?.data?.error || "Could not save logo.");
+    } finally {
+      setLogoSaving(false);
+    }
+  }
+
+  async function handleRemoveLogo() {
+    setLogoError("");
+    setLogoSaving(true);
+    try {
+      await client.put("/settings", { logo: null });
+      setLogoPreview(null);
+      refreshSchool();
+    } catch (err) {
+      setLogoError(err.response?.data?.error || "Could not remove logo.");
+    } finally {
+      setLogoSaving(false);
+    }
+  }
 
   const [bands, setBands] = useState([]);
   const [showBandForm, setShowBandForm] = useState(false);
@@ -104,6 +150,36 @@ export default function Settings() {
             {saved && <span className="text-moss text-sm">Saved.</span>}
           </div>
         </form>
+      </div>
+
+      <div>
+        <h2 className="text-2xl font-display font-semibold mb-6">School logo</h2>
+        <div className="card p-6 space-y-4">
+          <p className="text-xs text-slate/40">Shown alongside the school name on report cards, merit lists, and other printouts.</p>
+          <div className="flex items-center gap-4">
+            {logoPreview ? (
+              <img src={logoPreview} alt="School logo" className="w-16 h-16 object-contain border border-line rounded" />
+            ) : (
+              <div className="w-16 h-16 border border-dashed border-line rounded flex items-center justify-center text-xs text-slate/40">
+                No logo
+              </div>
+            )}
+            <div className="flex flex-col gap-2">
+              <input type="file" accept="image/*" onChange={handleLogoFile} className="text-sm" />
+              <div className="flex gap-3">
+                <button className="btn-primary text-sm" type="button" disabled={logoSaving || !logoPreview} onClick={handleSaveLogo}>
+                  {logoSaving ? "Saving…" : "Save logo"}
+                </button>
+                {logo && (
+                  <button className="btn-secondary text-sm" type="button" disabled={logoSaving} onClick={handleRemoveLogo}>
+                    Remove
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+          {logoError && <p className="text-rust text-sm">{logoError}</p>}
+        </div>
       </div>
 
       <div>

@@ -93,7 +93,8 @@ export default function ExamsOverview() {
                               <tr key={ex.id} className="border-b border-line/60">
                                 <td className="py-2 px-4 pl-14 text-slate/60" colSpan={2}>
                                   {ex.classRoom.name}
-                                  {ex.published && <span className="pill border border-moss/30 bg-moss/10 text-moss ml-2 text-xs">Published</span>}
+                                  {ex.status === "PUBLISHED" && <span className="pill border border-moss/30 bg-moss/10 text-moss ml-2 text-xs">Published</span>}
+                                  {ex.status === "LOCKED" && <span className="pill border border-ink/30 bg-ink/10 text-ink ml-2 text-xs">Locked</span>}
                                 </td>
                                 <td className="py-2 px-4 text-right">
                                   <Link to={`/marks/${ex.classRoomId}/${ex.id}`} className="btn-secondary text-xs">

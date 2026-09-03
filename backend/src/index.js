@@ -18,7 +18,7 @@ const app = express();
 // Locally (no FRONTEND_URL set), allow any origin for convenience.
 const allowedOrigin = process.env.FRONTEND_URL;
 app.use(cors(allowedOrigin ? { origin: allowedOrigin } : {}));
-app.use(express.json());
+app.use(express.json({ limit: "5mb" }));
 app.use(morgan("dev"));
 
 app.get("/api/health", (req, res) => res.json({ ok: true }));
@@ -31,6 +31,12 @@ app.use("/api/fees", feeRoutes);
 app.use("/api/timetable", timetableRoutes);
 app.use("/api/messages", messageRoutes);
 app.use("/api/settings", settingsRoutes);
+
+// Any unmatched API route — return JSON instead of Express's default HTML "Cannot GET ..." page,
+// so the frontend can always read err.response.data.error safely.
+app.use("/api", (req, res) => {
+  res.status(404).json({ error: "Not found" });
+});
 
 // Central error handler
 app.use((err, req, res, next) => {

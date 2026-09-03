@@ -14,7 +14,11 @@ client.interceptors.request.use((config) => {
 client.interceptors.response.use(
   (res) => res,
   (err) => {
-    if (err.response?.status === 401) {
+    // A 401 on the login request itself just means wrong credentials — let Login.jsx show the
+    // server's actual message. Previously this redirected immediately on every 401, including
+    // login failures, which wiped the page before the specific error could ever be displayed.
+    const isLoginRequest = err.config?.url?.includes("/auth/login");
+    if (err.response?.status === 401 && !isLoginRequest) {
       localStorage.removeItem("token");
       localStorage.removeItem("user");
       window.location.href = "/login";

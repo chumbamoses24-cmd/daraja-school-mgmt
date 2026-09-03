@@ -21,7 +21,8 @@ router.get("/", async (req, res) => {
 });
 
 const updateSchema = z.object({
-  schoolName: z.string().min(1).max(100),
+  schoolName: z.string().min(1).max(100).optional(),
+  logo: z.string().nullable().optional(), // base64 data URI, or null to remove
 });
 
 router.put("/", requireAuth, requireRole("ADMIN"), async (req, res) => {

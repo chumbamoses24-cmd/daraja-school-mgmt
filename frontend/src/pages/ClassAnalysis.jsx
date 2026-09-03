@@ -53,6 +53,8 @@ export default function ClassAnalysis() {
     client.get(`/grades/upload-status/${id}/${examId}`).then((r) => setSubjectStatus(r.data)).catch(() => setSubjectStatus([]));
   }, [id, examId]);
 
+  const selectedExam = exams.find((ex) => String(ex.id) === examId);
+
   async function downloadExamPdf(kind, defaultName) {
     const res = await client.get(`/grades/exam-analysis/${id}/${examId}/${kind}/pdf`, { responseType: "blob" });
     const url = window.URL.createObjectURL(new Blob([res.data], { type: "application/pdf" }));
@@ -158,6 +160,15 @@ export default function ClassAnalysis() {
         )}
 
         {examAnalysisError && <p className="text-rust text-sm">{examAnalysisError}</p>}
+
+        {selectedExam && selectedExam.status !== "DRAFT" && (
+          <div className="mb-6">
+            <button className="btn-secondary text-sm" onClick={() => downloadExamPdf("correction-sheet", "correction-sheet.pdf")}>
+              Download Correction Sheet
+            </button>
+            <p className="text-xs text-slate/40 mt-1">Sorted by admission number, not ranked — for learners to check marks and teachers to spot typing errors.</p>
+          </div>
+        )}
 
         {examAnalysis && (
           <>

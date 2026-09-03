@@ -16,6 +16,7 @@ export default function Grades() {
   const [students, setStudents] = useState([]);
   const [teachers, setTeachers] = useState([]);
   const [classSubjects, setClassSubjects] = useState([]);
+  const [gradingBands, setGradingBands] = useState([]);
 
   const [classRoomId, setClassRoomId] = useState("");
   const [subjectId, setSubjectId] = useState("");
@@ -53,6 +54,7 @@ export default function Grades() {
       else if (r.data.length) setClassRoomId(String(r.data[0].id));
     });
     refreshSubjects();
+    client.get("/grades/grading-system").then((r) => setGradingBands(r.data)).catch(() => {});
     client.get("/students").then((r) => setStudents(r.data));
     if (isAdmin) client.get("/auth/users?role=TEACHER").then((r) => setTeachers(r.data)).catch(() => {});
     const paramExamId = searchParams.get("examId");
@@ -205,14 +207,18 @@ export default function Grades() {
     }
   }
 
-  async function handleTogglePublish(exam) {
-    const willPublish = !exam.published;
-    if (willPublish && !window.confirm(`Publish "${exam.name}"? Parents will be able to see results for this exam once published.`)) return;
+  async function handleExamStatusChange(exam, action) {
+    const confirmations = {
+      lock: `Lock "${exam.name}"? Marks entry will close for teachers so you can review grading before publishing.`,
+      publish: `Publish "${exam.name}"? Teachers, class teachers, and parents will be able to see results for this exam.`,
+      unpublish: `Reopen "${exam.name}" for corrections? Marks entry will be available to teachers again, and results will be hidden from parents until you re-publish.`,
+    };
+    if (!window.confirm(confirmations[action])) return;
     try {
-      await client.put(`/grades/exams/${exam.id}`, { published: willPublish });
+      await client.put(`/grades/exams/${exam.id}/${action}`);
       refreshExams();
     } catch (err) {
-      alert(err.response?.data?.error || "Could not update publish status");
+      alert(err.response?.data?.error || "Could not update exam status");
     }
   }
 
@@ -246,6 +252,10 @@ export default function Grades() {
   }, [examId, subjectId]);
 
   const rankedGrades = [...existingGrades].sort((a, b) => b.score - a.score);
+  function letterGradeFor(pct) {
+    const band = gradingBands.find((b) => pct >= b.minPercent && pct <= b.maxPercent);
+    return band ? band.grade : "—";
+  }
   const gradedStudentIds = new Set(existingGrades.map((g) => g.student.id));
   const studentsMissingMarks = students.filter((s) => !gradedStudentIds.has(s.id));
 
@@ -675,8 +685,10 @@ export default function Grades() {
                       <td className="py-2 px-4">Term {ex.term}</td>
                       <td className="py-2 px-4">{ex.year}</td>
                       <td className="py-2 px-4">
-                        {ex.published ? (
+                        {ex.status === "PUBLISHED" ? (
                           <span className="pill border border-moss/30 bg-moss/10 text-moss">Published</span>
+                        ) : ex.status === "LOCKED" ? (
+                          <span className="pill border border-ink/30 bg-ink/10 text-ink">Locked</span>
                         ) : (
                           <span className="pill border border-amber/30 bg-amber/10 text-amber">Draft</span>
                         )}
@@ -686,9 +698,26 @@ export default function Grades() {
                           <button className="text-xs text-ink underline underline-offset-2 mr-3" onClick={() => handleEditExam(ex)}>
                             Edit
                           </button>
-                          <button className="text-xs text-ink underline underline-offset-2 mr-3" onClick={() => handleTogglePublish(ex)}>
-                            {ex.published ? "Unpublish" : "Publish"}
-                          </button>
+                          {ex.status === "DRAFT" && (
+                            <button className="text-xs text-ink underline underline-offset-2 mr-3" onClick={() => handleExamStatusChange(ex, "lock")}>
+                              Lock
+                            </button>
+                          )}
+                          {ex.status === "LOCKED" && (
+                            <>
+                              <button className="text-xs text-moss underline underline-offset-2 mr-3" onClick={() => handleExamStatusChange(ex, "publish")}>
+                                Publish
+                              </button>
+                              <button className="text-xs text-ink underline underline-offset-2 mr-3" onClick={() => handleExamStatusChange(ex, "unpublish")}>
+                                Reopen for correction
+                              </button>
+                            </>
+                          )}
+                          {ex.status === "PUBLISHED" && (
+                            <button className="text-xs text-ink underline underline-offset-2 mr-3" onClick={() => handleExamStatusChange(ex, "unpublish")}>
+                              Unpublish
+                            </button>
+                          )}
                           <button className="text-xs text-rust underline underline-offset-2" onClick={() => handleDeleteExam(ex)}>
                             Delete
                           </button>
@@ -727,12 +756,28 @@ export default function Grades() {
                       </div>
                     )}
                   </div>
-                  {isAdmin && selectedExam && (
-                    <button className="btn-secondary text-sm" onClick={() => handleTogglePublish(selectedExam)}>
-                      {selectedExam.published ? "Unpublish exam" : "Publish exam"}
+                  {isAdmin && selectedExam?.status === "DRAFT" && (
+                    <button className="btn-secondary text-sm" onClick={() => handleExamStatusChange(selectedExam, "lock")}>
+                      Lock exam
                     </button>
                   )}
-                  {selectedExam?.published && <span className="pill border border-moss/30 bg-moss/10 text-moss">Published</span>}
+                  {isAdmin && selectedExam?.status === "LOCKED" && (
+                    <>
+                      <button className="btn-secondary text-sm" onClick={() => handleExamStatusChange(selectedExam, "publish")}>
+                        Publish exam
+                      </button>
+                      <button className="btn-secondary text-sm" onClick={() => handleExamStatusChange(selectedExam, "unpublish")}>
+                        Reopen for correction
+                      </button>
+                    </>
+                  )}
+                  {isAdmin && selectedExam?.status === "PUBLISHED" && (
+                    <button className="btn-secondary text-sm" onClick={() => handleExamStatusChange(selectedExam, "unpublish")}>
+                      Unpublish exam
+                    </button>
+                  )}
+                  {selectedExam?.status === "LOCKED" && <span className="pill border border-ink/30 bg-ink/10 text-ink">Locked</span>}
+                  {selectedExam?.status === "PUBLISHED" && <span className="pill border border-moss/30 bg-moss/10 text-moss">Published</span>}
                   {markMode !== "ranked" && existingGrades.length > 0 && (
                     <button className="text-xs text-slate/50 underline underline-offset-2 ml-auto" onClick={backToRanked}>
                       Back to ranked view
@@ -751,6 +796,7 @@ export default function Grades() {
                           <th className="py-3 px-4">Student</th>
                           <th className="py-3 px-4">Score</th>
                           <th className="py-3 px-4">%</th>
+                          <th className="py-3 px-4">Grade</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -760,7 +806,8 @@ export default function Grades() {
                             <td className="py-2 px-4 font-mono text-xs text-slate/60">{g.student.admissionNo}</td>
                             <td className="py-2 px-4">{g.student.firstName} {g.student.lastName}</td>
                             <td className="py-2 px-4 font-mono">{g.score}/{g.maxScore}</td>
-                            <td className="py-2 px-4 font-mono text-slate/60">{((g.score / g.maxScore) * 100).toFixed(1)}%</td>
+                            <td className="py-2 px-4 font-mono text-slate/60">{Math.round((g.score / g.maxScore) * 100)}%</td>
+                            <td className="py-2 px-4 font-mono font-semibold">{letterGradeFor((g.score / g.maxScore) * 100)}</td>
                           </tr>
                         ))}
                       </tbody>

@@ -4,9 +4,18 @@ const { z } = require("zod");
 const prisma = require("../lib/prisma");
 const { requireAuth, requireRole } = require("../middleware/auth");
 const { getGradingSystem, gradeForPercent } = require("../lib/grading");
+const { sortByAdmissionNo } = require("../lib/sort");
 
 const router = express.Router();
 router.use(requireAuth);
+
+// School name + logo shown on every printout — falls back to sensible defaults if Settings
+// hasn't been touched yet (getOrCreateSettings in settings.js already guarantees a row exists
+// once anyone visits Settings, but grades.js can be hit first on a fresh install).
+async function getSchoolBranding() {
+  const settings = await prisma.schoolSettings.findFirst();
+  return { schoolName: settings?.schoolName || "My School", logo: settings?.logo || null };
+}
 
 // Shared builder used by both the JSON report-card route and the PDF route.
 // Throws { status, message } on not-found/forbidden so callers can respond appropriately.
@@ -26,13 +35,13 @@ async function buildReportCard(studentId, examId, requestUser) {
   ]);
 
   if (!student || !exam) throw { status: 404, message: "Student or exam not found" };
-  if (requestUser.role === "PARENT" && !exam.published) {
+  if (requestUser.role !== "ADMIN" && exam.status !== "PUBLISHED") {
     throw { status: 403, message: "This exam's results haven't been published yet" };
   }
 
   const totalScore = grades.reduce((sum, g) => sum + g.score, 0);
   const totalMax = grades.reduce((sum, g) => sum + g.maxScore, 0);
-  const average = totalMax ? Number(((totalScore / totalMax) * 100).toFixed(1)) : 0;
+  const average = totalMax ? Math.round((totalScore / totalMax) * 100) : 0;
 
   return {
     student: { id: student.id, name: `${student.firstName} ${student.lastName}`, admissionNo: student.admissionNo, classRoom: student.classRoom?.name },
@@ -41,9 +50,10 @@ async function buildReportCard(studentId, examId, requestUser) {
       const pct = (g.score / g.maxScore) * 100;
       return {
         subject: g.subject.name,
+        code: g.subject.code,
         score: g.score,
         maxScore: g.maxScore,
-        percentage: Number(pct.toFixed(1)),
+        percentage: Math.round(pct),
         grade: gradeForPercent(pct, bands).grade,
         remarks: g.remarks,
       };
@@ -181,13 +191,45 @@ router.put("/exams/:id", requireRole("ADMIN"), async (req, res) => {
     name: z.string().min(1).optional(),
     term: z.number().optional(),
     year: z.number().optional(),
-    published: z.boolean().optional(),
   });
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   const exam = await prisma.exam.update({
     where: { id: Number(req.params.id) },
     data: parsed.data,
+    include: { classRoom: { select: { name: true } } },
+  });
+  res.json(exam);
+});
+
+// ---- Two-stage publish workflow ----
+// Stage 1 (DRAFT -> LOCKED): marks entry closes for teachers so the admin can review/adjust
+// grading before anything goes public. Also reachable to move an exam back to DRAFT so a
+// correction sheet can be reopened to subject teachers to fix typing errors.
+router.put("/exams/:id/lock", requireRole("ADMIN"), async (req, res) => {
+  const exam = await prisma.exam.update({
+    where: { id: Number(req.params.id) },
+    data: { status: "LOCKED" },
+    include: { classRoom: { select: { name: true } } },
+  });
+  res.json(exam);
+});
+
+// Reopens marks entry — used to send a locked/published exam back for correction.
+router.put("/exams/:id/unpublish", requireRole("ADMIN"), async (req, res) => {
+  const exam = await prisma.exam.update({
+    where: { id: Number(req.params.id) },
+    data: { status: "DRAFT" },
+    include: { classRoom: { select: { name: true } } },
+  });
+  res.json(exam);
+});
+
+// Stage 2 (LOCKED -> PUBLISHED): results become visible to teachers/class teachers/parents.
+router.put("/exams/:id/publish", requireRole("ADMIN"), async (req, res) => {
+  const exam = await prisma.exam.update({
+    where: { id: Number(req.params.id) },
+    data: { status: "PUBLISHED" },
     include: { classRoom: { select: { name: true } } },
   });
   res.json(exam);
@@ -211,16 +253,31 @@ router.delete("/exams/:id", requireRole("ADMIN"), async (req, res) => {
 // Admins always can. Teachers can if they're the homeroom teacher of the class, or specifically
 // assigned to teach that subject in that class. Throws { status, message } if not allowed.
 async function assertCanGrade(examId, subjectId, user) {
-  if (user.role === "ADMIN") return;
   const exam = await prisma.exam.findUnique({ where: { id: examId }, include: { classRoom: true } });
   if (!exam) throw { status: 404, message: "Exam not found" };
+  if (user.role === "ADMIN") return exam;
+  if (exam.status !== "DRAFT") {
+    throw { status: 403, message: "Marks entry is closed for this exam" };
+  }
   const isHomeroomTeacher = exam.classRoom.teacherId === user.id;
-  if (isHomeroomTeacher) return;
+  if (isHomeroomTeacher) return exam;
   const assignment = await prisma.classSubject.findUnique({
     where: { classRoomId_subjectId: { classRoomId: exam.classRoomId, subjectId } },
   });
   if (!assignment || assignment.teacherId !== user.id) {
     throw { status: 403, message: "You are not assigned to teach this subject for this class" };
+  }
+  return exam;
+}
+
+// Non-admins can only see analysis, merit lists, and report forms once an exam is fully
+// published — before that they only see the raw marks-entry view.
+async function assertCanViewAnalysis(examId, user) {
+  if (user.role === "ADMIN") return;
+  const exam = await prisma.exam.findUnique({ where: { id: examId } });
+  if (!exam) throw { status: 404, message: "Exam not found" };
+  if (exam.status !== "PUBLISHED") {
+    throw { status: 403, message: "Results have not been published yet" };
   }
 }
 
@@ -341,7 +398,7 @@ router.get("/", async (req, res) => {
   if (req.user.role === "PARENT") {
     const children = await prisma.student.findMany({ where: { parentId: req.user.id }, select: { id: true } });
     where.studentId = { in: children.map((c) => c.id) };
-    where.exam = { published: true };
+    where.exam = { status: "PUBLISHED" };
   }
 
   let grades = await prisma.grade.findMany({
@@ -359,7 +416,7 @@ router.get("/", async (req, res) => {
 
 // Report card: all grades for a student in a given exam, with average & simple letter grade
 // Draws one report card onto the current page of an open PDFDocument. Does not call doc.end().
-function drawReportCardPage(doc, data) {
+function drawReportCardPage(doc, data, branding = { schoolName: "My School", logo: null }) {
   const inkColor = "#1B2A4A";
   const mossColor = "#2F6B4F";
   const rustColor = "#C1502E";
@@ -367,8 +424,18 @@ function drawReportCardPage(doc, data) {
   const lineColor = "#D9D4C6";
 
   // Header
-  doc.fillColor(inkColor).fontSize(22).font("Helvetica-Bold").text("Daraja", 50, 50);
-  doc.fillColor(slateColor).fontSize(9).font("Helvetica").text("SCHOOL REGISTER — REPORT CARD", 50, 76);
+  let headerTextX = 50;
+  if (branding.logo) {
+    try {
+      const base64 = branding.logo.split(",").pop();
+      doc.image(Buffer.from(base64, "base64"), 50, 45, { fit: [40, 40] });
+      headerTextX = 100;
+    } catch {
+      // Malformed logo data — skip it rather than breaking the whole PDF.
+    }
+  }
+  doc.fillColor(inkColor).fontSize(22).font("Helvetica-Bold").text(branding.schoolName, headerTextX, 50);
+  doc.fillColor(slateColor).fontSize(9).font("Helvetica").text("SCHOOL REGISTER — REPORT CARD", headerTextX, 76);
   doc.moveTo(50, 95).lineTo(545, 95).strokeColor(lineColor).lineWidth(1).stroke();
 
   // Student & exam details
@@ -465,7 +532,7 @@ router.get("/report-card/:studentId/:examId/pdf", async (req, res) => {
 
   const doc = new PDFDocument({ size: "A4", margin: 50 });
   doc.pipe(res);
-  drawReportCardPage(doc, data);
+  drawReportCardPage(doc, data, await getSchoolBranding());
   doc.end();
 });
 
@@ -474,42 +541,68 @@ router.get("/report-cards/class/:classRoomId/:examId/pdf", requireRole("ADMIN", 
   const classRoomId = Number(req.params.classRoomId);
   const examId = Number(req.params.examId);
 
-  const students = await prisma.student.findMany({
-    where: { classRoomId },
-    orderBy: { admissionNo: "asc" },
-  });
+  const students = sortByAdmissionNo(await prisma.student.findMany({ where: { classRoomId } }));
   if (students.length === 0) return res.status(404).json({ error: "No students found in this class" });
 
   const exam = await prisma.exam.findUnique({ where: { id: examId }, include: { classRoom: { select: { name: true } } } });
   const fileName = `report-cards-${(exam?.classRoom?.name || "class").replace(/\s+/g, "-").toLowerCase()}-${req.params.examId}.pdf`;
+
+  let pages;
+  try {
+    pages = await Promise.all(students.map((s) => buildReportCard(s.id, examId, req.user)));
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    throw err;
+  }
+
   res.setHeader("Content-Type", "application/pdf");
   res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
 
   const doc = new PDFDocument({ size: "A4", margin: 50 });
   doc.pipe(res);
 
-  for (let i = 0; i < students.length; i++) {
-    const data = await buildReportCard(students[i].id, examId, req.user);
+  const branding = await getSchoolBranding();
+  for (let i = 0; i < pages.length; i++) {
     if (i > 0) doc.addPage();
-    drawReportCardPage(doc, data);
+    drawReportCardPage(doc, pages[i], branding);
   }
 
   doc.end();
 });
 
 // Shared builder for exam analysis — used by the JSON route and all three downloadable PDFs below.
+// Streams under the same level (e.g. Grade 8 East / Grade 8 West) are ranked together as one
+// class, since they're really one cohort split for logistics rather than separate classes.
 // Throws { status, message } on not-found so callers can respond appropriately.
 async function buildExamAnalysis(classRoomId, examId) {
-  const [exam, students, grades, bands] = await Promise.all([
-    prisma.exam.findUnique({ where: { id: examId }, include: { classRoom: { select: { name: true, level: true, stream: true } } } }),
-    prisma.student.findMany({ where: { classRoomId }, orderBy: { admissionNo: "asc" } }),
-    prisma.grade.findMany({ where: { examId, student: { classRoomId } }, include: { subject: true, student: true } }),
-    getGradingSystem(),
-  ]);
-
+  const exam = await prisma.exam.findUnique({ where: { id: examId }, include: { classRoom: true } });
   if (!exam) throw { status: 404, message: "Exam not found" };
 
+  const siblingClassRooms = await prisma.classRoom.findMany({ where: { level: exam.classRoom.level } });
+  const siblingClassRoomIds = siblingClassRooms.map((c) => c.id);
+  const isMultiStream = siblingClassRooms.length > 1;
+
+  // Sibling exams — same name/term/year, one per stream — so grades recorded under each
+  // stream's own Exam row still get pulled into the combined ranking.
+  const siblingExams = await prisma.exam.findMany({
+    where: { name: exam.name, term: exam.term, year: exam.year, classRoomId: { in: siblingClassRoomIds } },
+  });
+  const examIds = siblingExams.length ? siblingExams.map((e) => e.id) : [examId];
+
+  const [students, grades, bands] = await Promise.all([
+    prisma.student.findMany({ where: { classRoomId: { in: siblingClassRoomIds } } }),
+    prisma.grade.findMany({ where: { examId: { in: examIds } }, include: { subject: true, student: true } }),
+    getGradingSystem(),
+  ]);
+  const sortedStudents = sortByAdmissionNo(students);
+
   const subjectNames = [...new Set(grades.map((g) => g.subject.name))].sort();
+  const subjectCodeByName = Object.fromEntries(
+    subjectNames.map((name) => {
+      const g = grades.find((gr) => gr.subject.name === name);
+      return [name, g ? g.subject.code : name.slice(0, 4).toUpperCase()];
+    })
+  );
   const subjectCount = subjectNames.length;
   const totalMarks = subjectNames.reduce((sum, name) => {
     const oneGrade = grades.find((g) => g.subject.name === name);
@@ -523,7 +616,7 @@ async function buildExamAnalysis(classRoomId, examId) {
     const subjectGrades = grades.filter((g) => g.subject.name === name);
     const total = subjectGrades.reduce((s, g) => s + g.score, 0);
     const max = subjectGrades.reduce((s, g) => s + g.maxScore, 0);
-    const mean = max ? Number(((total / max) * 100).toFixed(1)) : 0;
+    const mean = max ? Math.round((total / max) * 100) : 0;
 
     const distribution = gradeCount();
     const distributionByGender = { Male: gradeCount(), Female: gradeCount() };
@@ -535,24 +628,24 @@ async function buildExamAnalysis(classRoomId, examId) {
       if (genderKey) distributionByGender[genderKey][grade] = (distributionByGender[genderKey][grade] || 0) + 1;
     });
 
-    return { subject: name, mean, distribution, distributionByGender };
+    return { subject: name, code: subjectCodeByName[name], mean, distribution, distributionByGender };
   });
   subjectStats.sort((a, b) => b.mean - a.mean);
   subjectStats.forEach((s, i) => (s.rank = i + 1));
 
   // Per-student merit list: subject scores/grades, totals, points, mean points, position
-  const studentRows = students.map((s) => {
+  const studentRows = sortedStudents.map((s) => {
     const sGrades = grades.filter((g) => g.studentId === s.id);
     const subjects = subjectNames.map((name) => {
       const g = sGrades.find((gr) => gr.subject.name === name);
-      if (!g) return { subject: name, score: null, maxScore: null, grade: null, points: null };
+      if (!g) return { subject: name, code: subjectCodeByName[name], score: null, maxScore: null, grade: null, points: null };
       const pct = (g.score / g.maxScore) * 100;
       const { grade, points } = gradeForPercent(pct, bands);
-      return { subject: name, score: g.score, maxScore: g.maxScore, grade, points };
+      return { subject: name, code: subjectCodeByName[name], score: g.score, maxScore: g.maxScore, grade, points };
     });
     const totalScore = sGrades.reduce((sum, g) => sum + g.score, 0);
     const totalMax = sGrades.reduce((sum, g) => sum + g.maxScore, 0);
-    const meanScore = totalMax ? Number(((totalScore / totalMax) * 100).toFixed(1)) : null;
+    const meanScore = totalMax ? Math.round((totalScore / totalMax) * 100) : null;
     const totalPoints = subjects.reduce((sum, sub) => sum + (sub.points || 0), 0);
     const gradedSubjectCount = subjects.filter((sub) => sub.points != null).length;
     const meanPoints = gradedSubjectCount ? Number((totalPoints / gradedSubjectCount).toFixed(2)) : null;
@@ -562,6 +655,7 @@ async function buildExamAnalysis(classRoomId, examId) {
       admissionNo: s.admissionNo,
       name: `${s.firstName} ${s.lastName}`,
       gender: s.gender,
+      streamName: s.classRoomId ? siblingClassRooms.find((c) => c.id === s.classRoomId)?.name : null,
       subjects,
       totalScore,
       meanScore,
@@ -587,7 +681,7 @@ async function buildExamAnalysis(classRoomId, examId) {
 
   const gradedStudents = studentRows.filter((s) => s.meanScore != null);
   const classMeanScore = gradedStudents.length
-    ? Number((gradedStudents.reduce((s, st) => s + st.meanScore, 0) / gradedStudents.length).toFixed(1))
+    ? Math.round(gradedStudents.reduce((s, st) => s + st.meanScore, 0) / gradedStudents.length)
     : null;
   const classMeanPoints = gradedStudents.length
     ? Number((gradedStudents.reduce((s, st) => s + (st.meanPoints || 0), 0) / gradedStudents.length).toFixed(2))
@@ -598,17 +692,17 @@ async function buildExamAnalysis(classRoomId, examId) {
   const genderComparison = {
     boys: {
       count: boys.length,
-      meanScore: boys.length ? Number((boys.reduce((s, b) => s + b.meanScore, 0) / boys.length).toFixed(1)) : null,
+      meanScore: boys.length ? Math.round(boys.reduce((s, b) => s + b.meanScore, 0) / boys.length) : null,
     },
     girls: {
       count: girls.length,
-      meanScore: girls.length ? Number((girls.reduce((s, g) => s + g.meanScore, 0) / girls.length).toFixed(1)) : null,
+      meanScore: girls.length ? Math.round(girls.reduce((s, g) => s + g.meanScore, 0) / girls.length) : null,
     },
   };
 
   return {
     exam,
-    classRoom: exam.classRoom,
+    classRoom: { name: isMultiStream ? exam.classRoom.level : exam.classRoom.name, level: exam.classRoom.level, isMultiStream },
     subjectCount,
     totalMarks,
     classMeanScore,
@@ -626,6 +720,7 @@ async function buildExamAnalysis(classRoomId, examId) {
 // (overall, per subject, and split by gender) — Zeraki-style exam analysis.
 router.get("/exam-analysis/:classRoomId/:examId", requireRole("ADMIN", "TEACHER"), async (req, res) => {
   try {
+    await assertCanViewAnalysis(Number(req.params.examId), req.user);
     const data = await buildExamAnalysis(Number(req.params.classRoomId), Number(req.params.examId));
     res.json(data);
   } catch (err) {
@@ -641,16 +736,33 @@ const PDF_RUST = "#C1502E";
 const PDF_SLATE = "#232323";
 const PDF_LINE = "#D9D4C6";
 
-function drawPdfHeader(doc, title, subtitle, pageWidth, margin) {
-  doc.fillColor(PDF_INK).fontSize(20).font("Helvetica-Bold").text(title, margin, margin);
-  doc.fillColor(PDF_SLATE).fontSize(9).font("Helvetica").text(subtitle, margin, margin + 25);
-  doc.moveTo(margin, margin + 44).lineTo(margin + pageWidth, margin + 44).strokeColor(PDF_LINE).lineWidth(1).stroke();
+function drawPdfHeader(doc, title, subtitle, pageWidth, margin, branding) {
+  let titleY = margin;
+  if (branding?.schoolName) {
+    let brandX = margin;
+    if (branding.logo) {
+      try {
+        const base64 = branding.logo.split(",").pop();
+        doc.image(Buffer.from(base64, "base64"), margin, margin, { fit: [24, 24] });
+        brandX = margin + 30;
+      } catch {
+        // Malformed logo data — skip it rather than breaking the whole PDF.
+      }
+    }
+    doc.fillColor(PDF_SLATE).fontSize(9).font("Helvetica-Bold").text(branding.schoolName.toUpperCase(), brandX, margin + 6);
+    titleY = margin + 20;
+  }
+  doc.fillColor(PDF_INK).fontSize(20).font("Helvetica-Bold").text(title, margin, titleY);
+  doc.fillColor(PDF_SLATE).fontSize(9).font("Helvetica").text(subtitle, margin, titleY + 25);
+  doc.moveTo(margin, titleY + 44).lineTo(margin + pageWidth, titleY + 44).strokeColor(PDF_LINE).lineWidth(1).stroke();
+  return titleY + 55; // y position callers should start drawing content from
 }
 
 // Downloadable merit list PDF — position, per-subject score+grade, totals, points.
 router.get("/exam-analysis/:classRoomId/:examId/merit-list/pdf", requireRole("ADMIN", "TEACHER"), async (req, res) => {
   let data;
   try {
+    await assertCanViewAnalysis(Number(req.params.examId), req.user);
     data = await buildExamAnalysis(Number(req.params.classRoomId), Number(req.params.examId));
   } catch (err) {
     if (err.status) return res.status(err.status).json({ error: err.message });
@@ -665,12 +777,13 @@ router.get("/exam-analysis/:classRoomId/:examId/merit-list/pdf", requireRole("AD
   const doc = new PDFDocument({ size: "A4", layout: "landscape", margin });
   doc.pipe(res);
   const pageWidth = doc.page.width - margin * 2;
+  const branding = await getSchoolBranding();
 
-  drawPdfHeader(doc, `${data.classRoom.name} — Merit List`, `${data.exam.name} — Term ${data.exam.term}, ${data.exam.year}`, pageWidth, margin);
+  const contentY = drawPdfHeader(doc, `${data.classRoom.name} — Merit List`, `${data.exam.name} — Term ${data.exam.term}, ${data.exam.year}`, pageWidth, margin, branding);
 
   const subjectColWidth = Math.min(70, (pageWidth - 260) / Math.max(data.subjectCount, 1));
   const col = { pos: margin, adm: margin + 30, name: margin + 85, subjectsStart: margin + 220 };
-  let y = margin + 55;
+  let y = contentY;
 
   function drawHeaderRow() {
     doc.fillColor("#FFFFFF").rect(margin, y, pageWidth, 20).fill(PDF_INK);
@@ -679,7 +792,7 @@ router.get("/exam-analysis/:classRoomId/:examId/merit-list/pdf", requireRole("AD
     doc.text("ADM NO", col.adm, y + 6);
     doc.text("NAME", col.name, y + 6);
     data.subjects.forEach((s, i) => {
-      doc.text(s.subject.slice(0, 10).toUpperCase(), col.subjectsStart + i * subjectColWidth, y + 6, { width: subjectColWidth - 2 });
+      doc.text((s.code || s.subject).toUpperCase(), col.subjectsStart + i * subjectColWidth, y + 6, { width: subjectColWidth - 2 });
     });
     const totalsX = col.subjectsStart + data.subjectCount * subjectColWidth;
     doc.text("TOT", totalsX, y + 6);
@@ -723,6 +836,7 @@ router.get("/exam-analysis/:classRoomId/:examId/merit-list/pdf", requireRole("AD
 router.get("/exam-analysis/:classRoomId/:examId/subjects-report/pdf", requireRole("ADMIN", "TEACHER"), async (req, res) => {
   let data;
   try {
+    await assertCanViewAnalysis(Number(req.params.examId), req.user);
     data = await buildExamAnalysis(Number(req.params.classRoomId), Number(req.params.examId));
   } catch (err) {
     if (err.status) return res.status(err.status).json({ error: err.message });
@@ -738,9 +852,9 @@ router.get("/exam-analysis/:classRoomId/:examId/subjects-report/pdf", requireRol
   doc.pipe(res);
   const pageWidth = doc.page.width - margin * 2;
 
-  drawPdfHeader(doc, `${data.classRoom.name} — Subject Analysis`, `${data.exam.name} — Term ${data.exam.term}, ${data.exam.year}`, pageWidth, margin);
+  const contentY = drawPdfHeader(doc, `${data.classRoom.name} — Subject Analysis`, `${data.exam.name} — Term ${data.exam.term}, ${data.exam.year}`, pageWidth, margin, await getSchoolBranding());
 
-  let y = margin + 60;
+  let y = contentY + 5;
   doc.fillColor(PDF_SLATE).fontSize(10).font("Helvetica").text(
     `Subjects: ${data.subjectCount}   ·   Total Marks: ${data.totalMarks}   ·   Class Mean: ${data.classMeanScore ?? "—"}%   ·   Class Mean Points: ${data.classMeanPoints ?? "—"}`,
     margin,
@@ -784,6 +898,7 @@ router.get("/exam-analysis/:classRoomId/:examId/subjects-report/pdf", requireRol
 router.get("/exam-analysis/:classRoomId/:examId/top10/pdf", requireRole("ADMIN", "TEACHER"), async (req, res) => {
   let data;
   try {
+    await assertCanViewAnalysis(Number(req.params.examId), req.user);
     data = await buildExamAnalysis(Number(req.params.classRoomId), Number(req.params.examId));
   } catch (err) {
     if (err.status) return res.status(err.status).json({ error: err.message });
@@ -801,9 +916,9 @@ router.get("/exam-analysis/:classRoomId/:examId/top10/pdf", requireRole("ADMIN",
   doc.pipe(res);
   const pageWidth = doc.page.width - margin * 2;
 
-  drawPdfHeader(doc, `${data.classRoom.name} — Top 10 Students`, `${data.exam.name} — Term ${data.exam.term}, ${data.exam.year}`, pageWidth, margin);
+  const contentY = drawPdfHeader(doc, `${data.classRoom.name} — Top 10 Students`, `${data.exam.name} — Term ${data.exam.term}, ${data.exam.year}`, pageWidth, margin, await getSchoolBranding());
 
-  let y = margin + 60;
+  let y = contentY;
   const col = { pos: margin, adm: margin + 40, name: margin + 130, total: margin + 300, mean: margin + 370, pts: margin + 440, mpts: margin + 490 };
 
   doc.fillColor("#FFFFFF").rect(margin, y, pageWidth, 24).fill(PDF_INK);
@@ -836,6 +951,78 @@ router.get("/exam-analysis/:classRoomId/:examId/top10/pdf", requireRole("ADMIN",
   if (top10.length === 0) {
     doc.fillColor(PDF_SLATE).fontSize(10).text("No graded students found for this exam.", margin, y);
   }
+
+  doc.end();
+});
+
+// Correction sheet PDF — sorted by admission number (not ranked), so learners can check their
+// own marks and subject teachers can spot and fix typing errors after the 1st publish (LOCKED).
+// Admin can then use PUT /exams/:id/unpublish to reopen entry for corrections.
+router.get("/exam-analysis/:classRoomId/:examId/correction-sheet/pdf", requireRole("ADMIN", "TEACHER"), async (req, res) => {
+  const examId = Number(req.params.examId);
+  if (req.user.role !== "ADMIN") {
+    const exam = await prisma.exam.findUnique({ where: { id: examId } });
+    if (!exam) return res.status(404).json({ error: "Exam not found" });
+    if (exam.status === "DRAFT") {
+      return res.status(403).json({ error: "Correction sheet isn't available until marks are locked for review" });
+    }
+  }
+
+  let data;
+  try {
+    data = await buildExamAnalysis(Number(req.params.classRoomId), examId);
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    throw err;
+  }
+  const students = sortByAdmissionNo(data.students);
+
+  const fileName = `${data.classRoom.name.replace(/\s+/g, "-").toLowerCase()}-correction-sheet.pdf`;
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
+
+  const margin = 30;
+  const doc = new PDFDocument({ size: "A4", layout: "landscape", margin });
+  doc.pipe(res);
+  const pageWidth = doc.page.width - margin * 2;
+  const branding = await getSchoolBranding();
+
+  const contentY = drawPdfHeader(doc, `${data.classRoom.name} — Correction Sheet`, `${data.exam.name} — Term ${data.exam.term}, ${data.exam.year} — not ranked, for checking only`, pageWidth, margin, branding);
+
+  const subjectColWidth = Math.min(80, (pageWidth - 260) / Math.max(data.subjectCount, 1));
+  const col = { adm: margin, name: margin + 55, subjectsStart: margin + 200 };
+  let y = contentY;
+
+  function drawHeaderRow() {
+    doc.rect(margin, y, pageWidth, 20).strokeColor(PDF_LINE).lineWidth(0.5).stroke();
+    doc.fillColor(PDF_INK).fontSize(7).font("Helvetica-Bold");
+    doc.text("ADM NO", col.adm + 2, y + 6);
+    doc.text("NAME", col.name, y + 6);
+    data.subjects.forEach((s, i) => {
+      doc.text((s.code || s.subject).toUpperCase(), col.subjectsStart + i * subjectColWidth, y + 6, { width: subjectColWidth - 2 });
+    });
+    y += 20;
+  }
+
+  drawHeaderRow();
+  doc.font("Helvetica").fontSize(7.5);
+  students.forEach((s) => {
+    if (y > doc.page.height - 40) {
+      doc.addPage();
+      y = margin;
+      drawHeaderRow();
+      doc.font("Helvetica").fontSize(7.5);
+    }
+    const rowHeight = 18;
+    doc.rect(margin, y, pageWidth, rowHeight).strokeColor(PDF_LINE).lineWidth(0.5).stroke();
+    doc.fillColor(PDF_SLATE);
+    doc.text(s.admissionNo, col.adm + 2, y + 5);
+    doc.text(s.name, col.name, y + 5, { width: 140 });
+    s.subjects.forEach((sub, j) => {
+      doc.text(sub.score != null ? String(sub.score) : "—", col.subjectsStart + j * subjectColWidth, y + 5, { width: subjectColWidth - 2 });
+    });
+    y += rowHeight;
+  });
 
   doc.end();
 });

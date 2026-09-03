@@ -3,6 +3,7 @@ const PDFDocument = require("pdfkit");
 const { z } = require("zod");
 const prisma = require("../lib/prisma");
 const { requireAuth, requireRole } = require("../middleware/auth");
+const { sortByAdmissionNo } = require("../lib/sort");
 
 const router = express.Router();
 router.use(requireAuth);
@@ -88,7 +89,7 @@ router.get("/classrooms/:id/analysis", requireRole("ADMIN", "TEACHER"), async (r
   });
   if (!classRoom) return res.status(404).json({ error: "Class not found" });
 
-  const students = await prisma.student.findMany({ where: { classRoomId }, orderBy: { admissionNo: "asc" } });
+  const students = sortByAdmissionNo(await prisma.student.findMany({ where: { classRoomId } }));
   const studentIds = students.map((s) => s.id);
 
   const [attendance, grades] = await Promise.all([
@@ -156,10 +157,7 @@ router.get("/classrooms/:id/pdf", requireRole("ADMIN", "TEACHER"), async (req, r
   const classRoom = await prisma.classRoom.findUnique({ where: { id: classRoomId } });
   if (!classRoom) return res.status(404).json({ error: "Class not found" });
 
-  const students = await prisma.student.findMany({
-    where: { classRoomId },
-    orderBy: { admissionNo: "asc" },
-  });
+  const students = sortByAdmissionNo(await prisma.student.findMany({ where: { classRoomId } }));
 
   const fileName = `${classRoom.name.replace(/\s+/g, "-").toLowerCase()}-class-list.pdf`;
   res.setHeader("Content-Type", "application/pdf");
@@ -188,19 +186,20 @@ router.get("/classrooms/:id/pdf", requireRole("ADMIN", "TEACHER"), async (req, r
   y += 22;
 
   doc.font("Helvetica").fontSize(9);
+  const rowHeight20 = 20;
   students.forEach((s, i) => {
     if (y > 760) {
       doc.addPage();
       y = 50;
     }
-    if (i % 2 === 1) doc.fillColor("#F7F5EE").rect(50, y, 495, 20).fill();
+    doc.rect(50, y, 495, rowHeight20).strokeColor(lineColor).lineWidth(0.5).stroke();
     doc.fillColor(slateColor);
     doc.text(String(i + 1), col.no + 5, y + 5);
     doc.text(s.admissionNo, col.adm, y + 5);
     doc.text(`${s.firstName} ${s.lastName}`, col.name, y + 5, { width: 145 });
     doc.text(s.gender || "—", col.gender, y + 5);
     doc.text(s.guardianName || "—", col.guardian, y + 5, { width: 140 });
-    y += 20;
+    y += rowHeight20;
   });
 
   doc.end();
@@ -213,10 +212,7 @@ router.get("/classrooms/:id/marksheet/pdf", requireRole("ADMIN", "TEACHER"), asy
   const classRoom = await prisma.classRoom.findUnique({ where: { id: classRoomId } });
   if (!classRoom) return res.status(404).json({ error: "Class not found" });
 
-  const students = await prisma.student.findMany({
-    where: { classRoomId },
-    orderBy: { admissionNo: "asc" },
-  });
+  const students = sortByAdmissionNo(await prisma.student.findMany({ where: { classRoomId } }));
 
   const fileName = `${classRoom.name.replace(/\s+/g, "-").toLowerCase()}-mark-sheet.pdf`;
   res.setHeader("Content-Type", "application/pdf");
@@ -259,7 +255,7 @@ router.get("/classrooms/:id/marksheet/pdf", requireRole("ADMIN", "TEACHER"), asy
       doc.addPage();
       y = 40;
     }
-    if (i % 2 === 1) doc.fillColor("#F7F5EE").rect(40, y, pageWidth, rowHeight).fill();
+    doc.rect(40, y, pageWidth, rowHeight).strokeColor(lineColor).lineWidth(0.5).stroke();
     doc.fillColor(slateColor);
     doc.text(String(i + 1), col.no + 5, y + 7);
     doc.text(s.admissionNo, col.adm, y + 7);
@@ -287,14 +283,15 @@ router.get("/", async (req, res) => {
   if (classRoomId) where.classRoomId = Number(classRoomId);
   if (parentId && req.user.role !== "PARENT") where.parentId = Number(parentId);
 
-  const students = await prisma.student.findMany({
-    where,
-    include: {
-      classRoom: { select: { id: true, name: true, level: true } },
-      parent: { select: { id: true, firstName: true, lastName: true, phone: true, email: true } },
-    },
-    orderBy: { admissionNo: "asc" },
-  });
+  const students = sortByAdmissionNo(
+    await prisma.student.findMany({
+      where,
+      include: {
+        classRoom: { select: { id: true, name: true, level: true } },
+        parent: { select: { id: true, firstName: true, lastName: true, phone: true, email: true } },
+      },
+    })
+  );
   res.json(students);
 });
 

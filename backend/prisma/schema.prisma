@@ -20,6 +20,7 @@ datasource db {
 model SchoolSettings {
   id         Int    @id @default(autoincrement())
   schoolName String @default("My School")
+  logo       String? // base64 data URI, shown on printouts alongside the school name
 }
 
 model User {
@@ -136,7 +137,11 @@ model Exam {
   year        Int
   classRoomId Int
   classRoom   ClassRoom @relation(fields: [classRoomId], references: [id])
-  published   Boolean   @default(false)
+  // DRAFT: teachers can enter/edit marks.
+  // LOCKED: marks entry stops; admin reviews/adjusts grading before going public. A correction
+  //         sheet can be opened back up to teachers from here (see grades.js unpublish route).
+  // PUBLISHED: results, analysis, merit list & report cards visible to teachers/class teachers/parents.
+  status      String    @default("DRAFT")
   grades      Grade[]
 }
 
