@@ -206,7 +206,7 @@ router.get("/classrooms/:id/pdf", requireRole("ADMIN", "TEACHER"), async (req, r
 });
 
 // Printable mark sheet: Adm No, Name, Stream, and several blank ruled columns for a teacher to
-// record marks by hand. Landscape orientation to leave more room for the blank columns.
+// record marks by hand. Portrait orientation (columns sized to still fit the blank marks area).
 router.get("/classrooms/:id/marksheet/pdf", requireRole("ADMIN", "TEACHER"), async (req, res) => {
   const classRoomId = Number(req.params.id);
   const classRoom = await prisma.classRoom.findUnique({ where: { id: classRoomId } });
@@ -218,7 +218,7 @@ router.get("/classrooms/:id/marksheet/pdf", requireRole("ADMIN", "TEACHER"), asy
   res.setHeader("Content-Type", "application/pdf");
   res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
 
-  const doc = new PDFDocument({ size: "A4", layout: "landscape", margin: 40 });
+  const doc = new PDFDocument({ size: "A4", margin: 40 });
   doc.pipe(res);
 
   const inkColor = "#1B2A4A";
@@ -231,8 +231,8 @@ router.get("/classrooms/:id/marksheet/pdf", requireRole("ADMIN", "TEACHER"), asy
   doc.moveTo(40, 84).lineTo(40 + pageWidth, 84).strokeColor(lineColor).lineWidth(1).stroke();
 
   const BLANK_COLUMNS = 6;
-  const col = { no: 40, adm: 70, name: 150, stream: 320 };
-  const blankStartX = 390;
+  const col = { no: 40, adm: 65, name: 120, stream: 260 };
+  const blankStartX = 310;
   const blankWidth = (pageWidth - (blankStartX - 40)) / BLANK_COLUMNS;
 
   let y = 100;
@@ -259,8 +259,8 @@ router.get("/classrooms/:id/marksheet/pdf", requireRole("ADMIN", "TEACHER"), asy
     doc.fillColor(slateColor);
     doc.text(String(i + 1), col.no + 5, y + 7);
     doc.text(s.admissionNo, col.adm, y + 7);
-    doc.text(`${s.firstName} ${s.lastName}`, col.name, y + 7, { width: 160 });
-    doc.text(classRoom.stream || classRoom.name, col.stream, y + 7, { width: 65 });
+    doc.text(`${s.firstName} ${s.lastName}`, col.name, y + 7, { width: 135 });
+    doc.text(classRoom.stream || classRoom.name, col.stream, y + 7, { width: 45 });
 
     // Ruled blank columns for handwritten marks
     for (let c = 0; c <= BLANK_COLUMNS; c++) {
