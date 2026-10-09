@@ -294,8 +294,8 @@ export default function ClassAnalysis() {
                     <th className="py-2 px-3">Pos</th>
                     <th className="py-2 px-3">Adm No</th>
                     <th className="py-2 px-3">Name</th>
-                    {examAnalysis.subjects.map((s) => (
-                      <th key={s.subject} className="py-2 px-3 whitespace-nowrap">{s.subject}</th>
+                    {examAnalysis.subjectColumns.map((s) => (
+                      <th key={s.name} className="py-2 px-3 whitespace-nowrap" title={s.name}>{s.code}</th>
                     ))}
                     <th className="py-2 px-3">Total</th>
                     <th className="py-2 px-3">Mean %</th>

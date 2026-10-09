@@ -5,6 +5,7 @@ const prisma = require("../lib/prisma");
 const { requireAuth, requireRole } = require("../middleware/auth");
 const { getGradingSystem, gradeForPercent } = require("../lib/grading");
 const { sortByAdmissionNo } = require("../lib/sort");
+const { sortBySubjectOrder } = require("../lib/subjectOrder");
 
 const router = express.Router();
 router.use(requireAuth);
@@ -27,12 +28,13 @@ async function buildReportCard(studentId, examId, requestUser) {
     }
   }
 
-  const [student, exam, grades, bands] = await Promise.all([
+  const [student, exam, rawGrades, bands] = await Promise.all([
     prisma.student.findUnique({ where: { id: studentId }, include: { classRoom: true } }),
     prisma.exam.findUnique({ where: { id: examId } }),
     prisma.grade.findMany({ where: { studentId, examId }, include: { subject: true } }),
     getGradingSystem(),
   ]);
+  const grades = sortBySubjectOrder(rawGrades, (g) => g.subject.name);
 
   if (!student || !exam) throw { status: 404, message: "Student or exam not found" };
   if (requestUser.role !== "ADMIN" && exam.status !== "PUBLISHED") {
@@ -596,7 +598,7 @@ async function buildExamAnalysis(classRoomId, examId) {
   ]);
   const sortedStudents = sortByAdmissionNo(students);
 
-  const subjectNames = [...new Set(grades.map((g) => g.subject.name))].sort();
+  const subjectNames = sortBySubjectOrder([...new Set(grades.map((g) => g.subject.name))], (n) => n);
   const subjectCodeByName = Object.fromEntries(
     subjectNames.map((name) => {
       const g = grades.find((gr) => gr.subject.name === name);
@@ -700,10 +702,15 @@ async function buildExamAnalysis(classRoomId, examId) {
     },
   };
 
+  // Column headers for the merit list / ranked marks table, in the fixed subject order — kept
+  // separate from `subjects` below, which is sorted by mean score for the subject-ranking view.
+  const subjectColumns = subjectNames.map((name) => ({ name, code: subjectCodeByName[name] }));
+
   return {
     exam,
     classRoom: { name: isMultiStream ? exam.classRoom.level : exam.classRoom.name, level: exam.classRoom.level, isMultiStream },
     subjectCount,
+    subjectColumns,
     totalMarks,
     classMeanScore,
     classMeanPoints,
@@ -791,8 +798,13 @@ router.get("/exam-analysis/:classRoomId/:examId/merit-list/pdf", requireRole("AD
     doc.text("POS", col.pos + 2, y + 6);
     doc.text("ADM NO", col.adm, y + 6);
     doc.text("NAME", col.name, y + 6);
-    data.subjects.forEach((s, i) => {
-      doc.text((s.code || s.subject).toUpperCase(), col.subjectsStart + i * subjectColWidth, y + 6, { width: subjectColWidth - 2 });
+    // IMPORTANT: header columns must come from subjectColumns (fixed SUBJECT_ORDER), the same
+    // order each student row's `subjects` array is built in (see buildExamAnalysis). Using the
+    // mean-ranked `data.subjects` here was the bug: that array's order shifts per exam based on
+    // which subject scored highest, while row data stayed in fixed order — so headers and marks
+    // drifted out of sync (e.g. a CRE mark appearing under a Biology or Math header).
+    data.subjectColumns.forEach((s, i) => {
+      doc.text((s.code || s.name).toUpperCase(), col.subjectsStart + i * subjectColWidth, y + 6, { width: subjectColWidth - 2 });
     });
     const totalsX = col.subjectsStart + data.subjectCount * subjectColWidth;
     doc.text("TOT", totalsX, y + 6);
@@ -998,8 +1010,10 @@ router.get("/exam-analysis/:classRoomId/:examId/correction-sheet/pdf", requireRo
     doc.fillColor(PDF_INK).fontSize(7).font("Helvetica-Bold");
     doc.text("ADM NO", col.adm + 2, y + 6);
     doc.text("NAME", col.name, y + 6);
-    data.subjects.forEach((s, i) => {
-      doc.text((s.code || s.subject).toUpperCase(), col.subjectsStart + i * subjectColWidth, y + 6, { width: subjectColWidth - 2 });
+    // Same fix as the merit list: headers must follow subjectColumns (fixed order), matching
+    // each row's `subjects` array — not the mean-ranked `data.subjects`.
+    data.subjectColumns.forEach((s, i) => {
+      doc.text((s.code || s.name).toUpperCase(), col.subjectsStart + i * subjectColWidth, y + 6, { width: subjectColWidth - 2 });
     });
     y += 20;
   }
