@@ -225,42 +225,59 @@ router.get("/classrooms/:id/marksheet/pdf", requireRole("ADMIN", "TEACHER"), asy
   const slateColor = "#232323";
   const lineColor = "#D9D4C6";
   const pageWidth = doc.page.width - 80; // margins on both sides
+  const bottomMargin = 40;
+  const headerRowHeight = 20;
+  const titleBlockHeight = 100; // space used by title + subtitle + rule on page 1 only
 
-  doc.fillColor(inkColor).fontSize(20).font("Helvetica-Bold").text(classRoom.name, 40, 40);
-  doc.fillColor(slateColor).fontSize(9).font("Helvetica").text(`MARK SHEET — ${students.length} students`, 40, 65);
-  doc.moveTo(40, 84).lineTo(40 + pageWidth, 84).strokeColor(lineColor).lineWidth(1).stroke();
+  // Fit everyone on 1 page up to 50 students; beyond that, spread across (at most) 2 pages —
+  // never more, so row height/font shrink instead of adding a 3rd+ page.
+  const pageCount = students.length > 50 ? 2 : 1;
+  const rowsPerPage = Math.max(1, Math.ceil(students.length / pageCount));
+
+  // Row height is capped by whichever page has less room: page 1 (title eats into it) or a
+  // continuation page (starts right at the top margin).
+  const availablePage1 = doc.page.height - bottomMargin - titleBlockHeight - headerRowHeight;
+  const availablePage2 = doc.page.height - bottomMargin - 40 - headerRowHeight;
+  const tightestAvailable = Math.min(availablePage1, availablePage2);
+  const rowHeight = Math.max(9, Math.min(24, tightestAvailable / rowsPerPage));
+  const fontSize = Math.max(5.5, Math.min(9, rowHeight * 0.38));
+  const headerFontSize = Math.max(6, Math.min(9, rowHeight * 0.38));
 
   const BLANK_COLUMNS = 6;
   const col = { no: 40, adm: 65, name: 120, stream: 260 };
   const blankStartX = 310;
   const blankWidth = (pageWidth - (blankStartX - 40)) / BLANK_COLUMNS;
 
-  let y = 100;
-  const headerHeight = 24;
-  doc.fillColor("#FFFFFF").rect(40, y, pageWidth, headerHeight).fill(inkColor);
-  doc.fillColor("#FFFFFF").fontSize(9).font("Helvetica-Bold");
-  doc.text("#", col.no + 5, y + 8);
-  doc.text("ADM NO", col.adm, y + 8);
-  doc.text("NAME", col.name, y + 8);
-  doc.text("STREAM", col.stream, y + 8);
-  for (let i = 0; i < BLANK_COLUMNS; i++) {
-    doc.text("", blankStartX + i * blankWidth, y + 8); // reserved, headers left blank for handwriting
+  function drawHeaderRow(y) {
+    doc.fillColor("#FFFFFF").rect(40, y, pageWidth, headerRowHeight).fill(inkColor);
+    doc.fillColor("#FFFFFF").fontSize(headerFontSize).font("Helvetica-Bold");
+    doc.text("#", col.no + 5, y + headerRowHeight / 2 - headerFontSize / 2);
+    doc.text("ADM NO", col.adm, y + headerRowHeight / 2 - headerFontSize / 2);
+    doc.text("NAME", col.name, y + headerRowHeight / 2 - headerFontSize / 2);
+    doc.text("STREAM", col.stream, y + headerRowHeight / 2 - headerFontSize / 2);
+    return y + headerRowHeight;
   }
-  y += headerHeight;
 
-  const rowHeight = 24;
-  doc.font("Helvetica").fontSize(9);
+  doc.fillColor(inkColor).fontSize(20).font("Helvetica-Bold").text(classRoom.name, 40, 40);
+  doc.fillColor(slateColor).fontSize(9).font("Helvetica").text(`MARK SHEET — ${students.length} students`, 40, 65);
+  doc.moveTo(40, 84).lineTo(40 + pageWidth, 84).strokeColor(lineColor).lineWidth(1).stroke();
+
+  let y = drawHeaderRow(titleBlockHeight);
+
+  doc.font("Helvetica").fontSize(fontSize);
   students.forEach((s, i) => {
-    if (y > doc.page.height - 60) {
+    if (i > 0 && i % rowsPerPage === 0) {
       doc.addPage();
-      y = 40;
+      y = drawHeaderRow(40);
+      doc.font("Helvetica").fontSize(fontSize);
     }
     doc.rect(40, y, pageWidth, rowHeight).strokeColor(lineColor).lineWidth(0.5).stroke();
     doc.fillColor(slateColor);
-    doc.text(String(i + 1), col.no + 5, y + 7);
-    doc.text(s.admissionNo, col.adm, y + 7);
-    doc.text(`${s.firstName} ${s.lastName}`, col.name, y + 7, { width: 135 });
-    doc.text(classRoom.stream || classRoom.name, col.stream, y + 7, { width: 45 });
+    const textY = y + rowHeight / 2 - fontSize / 2;
+    doc.text(String(i + 1), col.no + 5, textY);
+    doc.text(s.admissionNo, col.adm, textY);
+    doc.text(`${s.firstName} ${s.lastName}`, col.name, textY, { width: 135 });
+    doc.text(classRoom.stream || classRoom.name, col.stream, textY, { width: 45 });
 
     // Ruled blank columns for handwritten marks
     for (let c = 0; c <= BLANK_COLUMNS; c++) {
