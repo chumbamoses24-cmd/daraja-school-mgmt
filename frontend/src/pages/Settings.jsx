@@ -7,9 +7,24 @@ const emptyBandForm = { grade: "", minPercent: "", maxPercent: "", points: "" };
 export default function Settings() {
   const { schoolName, logo, refreshSchool } = useSchool();
   const [name, setName] = useState(schoolName);
+  const [address, setAddress] = useState("");
+  const [headTeacherName, setHeadTeacherName] = useState("");
+  const [closingDate, setClosingDate] = useState("");
+  const [nextTermBegins, setNextTermBegins] = useState("");
   const [error, setError] = useState("");
   const [saved, setSaved] = useState(false);
   const [loading, setLoading] = useState(false);
+
+  // These four aren't in SchoolContext (only schoolName/logo are, for the login screen), so
+  // load them directly — they only matter here and on the report-form PDF.
+  useEffect(() => {
+    client.get("/settings").then((r) => {
+      setAddress(r.data.address || "");
+      setHeadTeacherName(r.data.headTeacherName || "");
+      setClosingDate(r.data.closingDate || "");
+      setNextTermBegins(r.data.nextTermBegins || "");
+    });
+  }, []);
 
   const [logoPreview, setLogoPreview] = useState(logo);
   const [logoError, setLogoError] = useState("");
@@ -73,7 +88,7 @@ export default function Settings() {
     setError("");
     setLoading(true);
     try {
-      await client.put("/settings", { schoolName: name });
+      await client.put("/settings", { schoolName: name, address, headTeacherName, closingDate, nextTermBegins });
       refreshSchool();
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
@@ -142,6 +157,27 @@ export default function Settings() {
             <input className="input" required maxLength={100} value={name} onChange={(e) => setName(e.target.value)} />
             <p className="text-xs text-slate/40 mt-1">Shown on the login screen and throughout the app.</p>
           </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">Address</label>
+            <input className="input" maxLength={200} placeholder="P.O BOX 7198 – ELDORET" value={address} onChange={(e) => setAddress(e.target.value)} />
+            <p className="text-xs text-slate/40 mt-1">Shown under the school name on report cards and other printouts.</p>
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">Head teacher's name</label>
+            <input className="input" maxLength={100} placeholder="e.g. Wilson Tarus" value={headTeacherName} onChange={(e) => setHeadTeacherName(e.target.value)} />
+            <p className="text-xs text-slate/40 mt-1">Printed above the signature line on report cards.</p>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium mb-1">Closing date</label>
+              <input className="input" maxLength={50} placeholder="e.g. 12th Dec 2026" value={closingDate} onChange={(e) => setClosingDate(e.target.value)} />
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">Next term begins</label>
+              <input className="input" maxLength={50} placeholder="e.g. 5th Jan 2027" value={nextTermBegins} onChange={(e) => setNextTermBegins(e.target.value)} />
+            </div>
+          </div>
+          <p className="text-xs text-slate/40 -mt-2">Update these each term — they print on every report card.</p>
           {error && <p className="text-rust text-sm">{error}</p>}
           <div className="flex items-center gap-3">
             <button className="btn-primary" type="submit" disabled={loading}>

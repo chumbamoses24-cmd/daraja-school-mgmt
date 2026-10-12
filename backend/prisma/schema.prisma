@@ -18,9 +18,13 @@ datasource db {
 
 // Single-row table holding school-wide settings (school name, etc.)
 model SchoolSettings {
-  id         Int    @id @default(autoincrement())
-  schoolName String @default("My School")
-  logo       String? // base64 data URI, shown on printouts alongside the school name
+  id              Int     @id @default(autoincrement())
+  schoolName      String  @default("My School")
+  logo            String? // base64 data URI, shown on printouts alongside the school name
+  address         String? // e.g. "P.O BOX 7198 - ELDORET", shown under the school name on report forms
+  headTeacherName String? // printed above the head teacher's signature line on report forms
+  closingDate     String? // free text, e.g. "12th Dec 2026" — updated each term
+  nextTermBegins  String? // free text, e.g. "5th Jan 2027" — updated each term
 }
 
 model User {

@@ -15,10 +15,20 @@ router.use(requireAuth);
 // once anyone visits Settings, but grades.js can be hit first on a fresh install).
 async function getSchoolBranding() {
   const settings = await prisma.schoolSettings.findFirst();
-  return { schoolName: settings?.schoolName || "My School", logo: settings?.logo || null };
+  return {
+    schoolName: settings?.schoolName || "My School",
+    logo: settings?.logo || null,
+    address: settings?.address || null,
+    headTeacherName: settings?.headTeacherName || null,
+    closingDate: settings?.closingDate || null,
+    nextTermBegins: settings?.nextTermBegins || null,
+  };
 }
 
-// Shared builder used by both the JSON report-card route and the PDF route.
+// Shared builder used by both the JSON report-card route and the PDF route. Built on top of
+// buildExamAnalysis (defined further below) so the report form uses the exact same combined-
+// stream ranking, fixed subject order, and full canonical subject list (blank where ungraded)
+// as the merit list and correction sheet — the three documents stay in sync by construction.
 // Throws { status, message } on not-found/forbidden so callers can respond appropriately.
 async function buildReportCard(studentId, examId, requestUser) {
   if (requestUser.role === "PARENT") {
@@ -28,38 +38,47 @@ async function buildReportCard(studentId, examId, requestUser) {
     }
   }
 
-  const [student, exam, rawGrades, bands] = await Promise.all([
+  const [student, exam] = await Promise.all([
     prisma.student.findUnique({ where: { id: studentId }, include: { classRoom: true } }),
     prisma.exam.findUnique({ where: { id: examId } }),
-    prisma.grade.findMany({ where: { studentId, examId }, include: { subject: true } }),
-    getGradingSystem(),
   ]);
-  const grades = sortBySubjectOrder(rawGrades, (g) => g.subject.name);
-
   if (!student || !exam) throw { status: 404, message: "Student or exam not found" };
   if (requestUser.role !== "ADMIN" && exam.status !== "PUBLISHED") {
     throw { status: 403, message: "This exam's results haven't been published yet" };
   }
+  if (!student.classRoomId) throw { status: 400, message: "This student is not assigned to a class" };
 
-  const totalScore = grades.reduce((sum, g) => sum + g.score, 0);
-  const totalMax = grades.reduce((sum, g) => sum + g.maxScore, 0);
-  const average = totalMax ? Math.round((totalScore / totalMax) * 100) : 0;
+  const [analysis, bands] = await Promise.all([
+    buildExamAnalysis(student.classRoomId, examId),
+    getGradingSystem(),
+  ]);
+  const row = analysis.students.find((s) => s.id === studentId);
+  if (!row) throw { status: 404, message: "No results found for this student in this exam" };
+
+  const average = row.meanScore ?? 0;
 
   return {
-    student: { id: student.id, name: `${student.firstName} ${student.lastName}`, admissionNo: student.admissionNo, classRoom: student.classRoom?.name },
+    student: {
+      id: student.id,
+      name: `${student.firstName} ${student.lastName}`,
+      admissionNo: student.admissionNo,
+      classRoom: student.classRoom?.name,
+      level: student.classRoom?.level,
+    },
     exam,
-    subjects: grades.map((g) => {
-      const pct = (g.score / g.maxScore) * 100;
-      return {
-        subject: g.subject.name,
-        code: g.subject.code,
-        score: g.score,
-        maxScore: g.maxScore,
-        percentage: Math.round(pct),
-        grade: gradeForPercent(pct, bands).grade,
-        remarks: g.remarks,
-      };
-    }),
+    subjects: row.subjects.map((s) => ({
+      subject: s.subject,
+      code: s.code,
+      score: s.score,
+      maxScore: s.maxScore,
+      percentage: s.score != null && s.maxScore ? Math.round((s.score / s.maxScore) * 100) : null,
+      grade: s.grade,
+    })),
+    totalScore: row.totalScore,
+    totalPoints: row.totalPoints,
+    meanPoints: row.meanPoints,
+    position: row.position,
+    classSize: analysis.students.length,
     average,
     overallGrade: gradeForPercent(average, bands).grade,
   };
@@ -416,96 +435,142 @@ router.get("/", async (req, res) => {
   res.json(grades);
 });
 
-// Report card: all grades for a student in a given exam, with average & simple letter grade
+// Report card — matches Kabiemit Junior School's official report form template (the .dotx
+// Moses supplied): logo + school name/address between two red rule lines, a 3-column info
+// block (name/adm, class/total/average, points/position/level), a bordered SUBJECT/MARKS/LEVEL
+// breakdown table in fixed canonical subject order, closing-date/next-term line, a class
+// teacher's remarks area, and a head teacher signature line, closed off with a red+navy rule.
 // Draws one report card onto the current page of an open PDFDocument. Does not call doc.end().
-function drawReportCardPage(doc, data, branding = { schoolName: "My School", logo: null }) {
-  const inkColor = "#1B2A4A";
-  const mossColor = "#2F6B4F";
-  const rustColor = "#C1502E";
-  const slateColor = "#232323";
-  const lineColor = "#D9D4C6";
+const REPORT_RED = "#C00000";
+const REPORT_BROWN = "#833C0B";
+const REPORT_INK = "#1B2A4A";
+const REPORT_SLATE = "#232323";
+const REPORT_BORDER = "#444444";
 
-  // Header
-  let headerTextX = 50;
+function dottedLine(doc, x1, x2, y, color = REPORT_SLATE) {
+  doc.save();
+  doc.moveTo(x1, y).lineTo(x2, y).strokeColor(color).lineWidth(0.75).dash(1.5, { space: 2 }).stroke();
+  doc.restore();
+}
+
+function drawReportCardPage(doc, data, branding = { schoolName: "My School", logo: null }) {
+  const margin = 50;
+  const pageWidth = doc.page.width - margin * 2;
+  let y = margin;
+
+  // Top red rule
+  doc.rect(margin, y, pageWidth, 3).fill(REPORT_RED);
+  y += 10;
+
+  // Logo + school name/address
+  const headerTop = y;
+  let textX = margin;
   if (branding.logo) {
     try {
       const base64 = branding.logo.split(",").pop();
-      doc.image(Buffer.from(base64, "base64"), 50, 45, { fit: [40, 40] });
-      headerTextX = 100;
+      doc.image(Buffer.from(base64, "base64"), margin, headerTop, { fit: [72, 58] });
+      textX = margin + 85;
     } catch {
       // Malformed logo data — skip it rather than breaking the whole PDF.
     }
   }
-  doc.fillColor(inkColor).fontSize(22).font("Helvetica-Bold").text(branding.schoolName, headerTextX, 50);
-  doc.fillColor(slateColor).fontSize(9).font("Helvetica").text("SCHOOL REGISTER — REPORT CARD", headerTextX, 76);
-  doc.moveTo(50, 95).lineTo(545, 95).strokeColor(lineColor).lineWidth(1).stroke();
-
-  // Student & exam details
-  doc.fillColor(inkColor).fontSize(16).font("Helvetica-Bold").text(data.student.name, 50, 112);
-  doc
-    .fillColor(slateColor)
-    .fontSize(10)
-    .font("Helvetica")
-    .text(
-      `Admission No: ${data.student.admissionNo}   ·   Class: ${data.student.classRoom || "—"}`,
-      50,
-      134
-    );
-  doc.text(`${data.exam.name} — Term ${data.exam.term}, ${data.exam.year}`, 50, 150);
-
-  // Overall summary box
-  doc.roundedRect(400, 108, 145, 55, 3).strokeColor(lineColor).lineWidth(1).stroke();
-  doc.fillColor(slateColor).fontSize(8).font("Helvetica").text("OVERALL AVERAGE", 412, 118);
-  doc
-    .fillColor(inkColor)
-    .fontSize(20)
-    .font("Helvetica-Bold")
-    .text(`${data.average}%  ·  ${data.overallGrade}`, 412, 132);
-
-  // Table header
-  let y = 190;
-  const col = { subject: 50, score: 260, pct: 340, grade: 410, remarks: 470 };
-  doc.fillColor("#FFFFFF").rect(50, y, 495, 24).fill(inkColor);
-  doc.fillColor("#FFFFFF").fontSize(9).font("Helvetica-Bold");
-  doc.text("SUBJECT", col.subject + 8, y + 8);
-  doc.text("SCORE", col.score, y + 8);
-  doc.text("%", col.pct, y + 8);
-  doc.text("GRADE", col.grade, y + 8);
-  doc.text("REMARKS", col.remarks, y + 8);
-  y += 24;
-
-  // Table rows
-  doc.font("Helvetica").fontSize(10);
-  data.subjects.forEach((s, i) => {
-    const rowHeight = 26;
-    if (i % 2 === 1) {
-      doc.fillColor("#F7F5EE").rect(50, y, 495, rowHeight).fill();
-    }
-    doc.fillColor(slateColor);
-    doc.text(s.subject, col.subject + 8, y + 8, { width: 200 });
-    doc.text(`${s.score}/${s.maxScore}`, col.score, y + 8);
-    doc.text(`${s.percentage}%`, col.pct, y + 8);
-
-    const gradeColor = ["A", "B"].includes(s.grade) ? mossColor : s.grade === "E" ? rustColor : slateColor;
-    doc.fillColor(gradeColor).font("Helvetica-Bold").text(s.grade, col.grade, y + 8);
-    doc.fillColor(slateColor).font("Helvetica");
-
-    doc.fontSize(9).text(s.remarks || "—", col.remarks, y + 8, { width: 65 });
-    doc.fontSize(10);
-    y += rowHeight;
-  });
-
-  doc.moveTo(50, y).lineTo(545, y).strokeColor(lineColor).lineWidth(1).stroke();
-
-  if (data.subjects.length === 0) {
-    doc.fillColor(slateColor).fontSize(10).text("No grades recorded for this exam yet.", 50, y + 16);
+  doc.fillColor(REPORT_BROWN).font("Helvetica-Bold").fontSize(16).text(branding.schoolName.toUpperCase(), textX, headerTop + 8);
+  if (branding.address) {
+    doc.fontSize(11).text(branding.address, textX, headerTop + 30);
   }
+  y = headerTop + 60;
 
-  // Footer
-  doc
-    .fillColor("#888888")
-    .fontSize(8)
-    .text(`Generated on ${new Date().toLocaleDateString()} · Daraja School Register`, 50, 780, { align: "center", width: 495 });
+  // Bottom red rule of the header block
+  doc.rect(margin, y, pageWidth, 2.5).fill(REPORT_RED);
+  y += 22;
+
+  // Info block — a bordered 3x3 table (matches the real form's TableGrid-styled cells): NAME
+  // spans the first two columns, then ADM; then two plain 3-up rows.
+  const infoColW = [270, 112, 113];
+  const infoRowHeight = 24;
+  const drawInfoCell = (x, cw, label, value) => {
+    doc.rect(x, y, cw, infoRowHeight).strokeColor(REPORT_BORDER).lineWidth(0.75).stroke();
+    doc
+      .font("Helvetica-Bold")
+      .fontSize(9.5)
+      .fillColor(REPORT_SLATE)
+      .text(label, x + 6, y + 7, { continued: true })
+      .font("Helvetica")
+      .text(` ${value ?? "—"}`, { width: cw - 12 });
+  };
+  drawInfoCell(margin, infoColW[0] + infoColW[1], "NAME:", data.student.name);
+  drawInfoCell(margin + infoColW[0] + infoColW[1], infoColW[2], "ADM:", data.student.admissionNo);
+  y += infoRowHeight;
+  drawInfoCell(margin, infoColW[0], "CLASS:", data.student.classRoom || "—");
+  drawInfoCell(margin + infoColW[0], infoColW[1], "TOTAL MARKS:", data.totalScore);
+  drawInfoCell(margin + infoColW[0] + infoColW[1], infoColW[2], "AVERAGE:", `${data.average}%`);
+  y += infoRowHeight;
+  drawInfoCell(margin, infoColW[0], "TOTAL POINTS:", data.totalPoints);
+  drawInfoCell(margin + infoColW[0], infoColW[1], "POSITION:", `${data.position ?? "—"} out of ${data.classSize}`);
+  drawInfoCell(margin + infoColW[0] + infoColW[1], infoColW[2], "LEVEL:", data.overallGrade);
+  y += infoRowHeight + 16;
+
+  doc.font("Helvetica-Bold").fontSize(11).text("BREAKDOWN", margin, y);
+  y += 20;
+
+  // Breakdown table — fixed columns, bordered, plain lines (no highlighted banding)
+  const colW = { subject: 270, marks: 112, level: 113 };
+  const rowHeight = 22;
+  const drawRow = (cells, { header = false } = {}) => {
+    doc.font(header ? "Helvetica-Bold" : "Helvetica").fontSize(9.5).fillColor(REPORT_SLATE);
+    let x = margin;
+    [["subject", cells[0]], ["marks", cells[1]], ["level", cells[2]]].forEach(([key, text]) => {
+      doc.rect(x, y, colW[key], rowHeight).strokeColor(REPORT_BORDER).lineWidth(0.75).stroke();
+      doc.text(String(text ?? ""), x + 6, y + 6, { width: colW[key] - 10 });
+      x += colW[key];
+    });
+    y += rowHeight;
+  };
+  drawRow(["SUBJECT", "MARKS", "LEVEL"], { header: true });
+  data.subjects.forEach((s) => {
+    drawRow([s.subject, s.score ?? "", s.grade ?? ""]);
+  });
+  y += 20;
+
+  // Closing date / next term — fixed label positions with either the configured date text or
+  // a blank dotted line in the gap, since continued text chains don't reserve space for a dash.
+  doc.font("Helvetica-Bold").fontSize(9.5).fillColor(REPORT_SLATE);
+  doc.text("CLOSING DATE:", margin, y);
+  if (branding.closingDate) {
+    doc.font("Helvetica").text(branding.closingDate, margin + 95, y);
+  } else {
+    dottedLine(doc, margin + 95, margin + 230, y + 8);
+  }
+  doc.font("Helvetica-Bold").text("NEXT TERM BEGINS:", margin + 250, y);
+  if (branding.nextTermBegins) {
+    doc.font("Helvetica").text(branding.nextTermBegins, margin + 365, y);
+  } else {
+    dottedLine(doc, margin + 365, margin + pageWidth, y + 8);
+  }
+  y += 30;
+
+  // Class teacher's remarks — left blank for handwriting, matching the paper form
+  doc.font("Helvetica-Bold").fontSize(9.5).fillColor(REPORT_SLATE).text("CLASS TEACHER'S REMARKS:", margin, y);
+  dottedLine(doc, margin + 175, margin + pageWidth, y + 8);
+  y += 20;
+  dottedLine(doc, margin, margin + pageWidth, y + 8);
+  y += 32;
+  doc.font("Helvetica-Bold").text("SIGNATURE", margin + 220, y);
+  dottedLine(doc, margin + 300, margin + pageWidth, y + 8);
+  y += 40;
+
+  dottedLine(doc, margin, margin + 380, y);
+  y += 14;
+  doc.font("Helvetica-Bold").fontSize(10).text(branding.headTeacherName || "", margin, y);
+  y += 16;
+  doc.text("HEAD TEACHER", margin, y);
+  doc.text("SIGNATURE", margin + 220, y);
+  dottedLine(doc, margin + 300, margin + pageWidth, y + 9);
+
+  // Footer rule — thin red over navy, matching the paper form's closing bar
+  const footerY = doc.page.height - 60;
+  doc.rect(margin, footerY, pageWidth, 1.5).fill(REPORT_RED);
+  doc.rect(margin, footerY + 4, pageWidth, 2.5).fill(REPORT_INK);
 }
 
 router.get("/report-card/:studentId/:examId", async (req, res) => {
@@ -591,18 +656,27 @@ async function buildExamAnalysis(classRoomId, examId) {
   });
   const examIds = siblingExams.length ? siblingExams.map((e) => e.id) : [examId];
 
-  const [students, grades, bands] = await Promise.all([
+  const [students, grades, classSubjects, bands] = await Promise.all([
     prisma.student.findMany({ where: { classRoomId: { in: siblingClassRoomIds } } }),
     prisma.grade.findMany({ where: { examId: { in: examIds } }, include: { subject: true, student: true } }),
+    prisma.classSubject.findMany({ where: { classRoomId: { in: siblingClassRoomIds } }, include: { subject: true } }),
     getGradingSystem(),
   ]);
   const sortedStudents = sortByAdmissionNo(students);
 
-  const subjectNames = sortBySubjectOrder([...new Set(grades.map((g) => g.subject.name))], (n) => n);
+  // Subject columns come from what's actually assigned to the class, not just what's been
+  // graded so far — so the breakdown table (and report card) always shows every subject the
+  // class takes, blank where marks haven't been entered yet, instead of that subject's column
+  // disappearing entirely.
+  const assignedSubjectNames = classSubjects.map((cs) => cs.subject.name);
+  const gradedSubjectNames = grades.map((g) => g.subject.name);
+  const subjectNames = sortBySubjectOrder([...new Set([...assignedSubjectNames, ...gradedSubjectNames])], (n) => n);
   const subjectCodeByName = Object.fromEntries(
     subjectNames.map((name) => {
       const g = grades.find((gr) => gr.subject.name === name);
-      return [name, g ? g.subject.code : name.slice(0, 4).toUpperCase()];
+      if (g) return [name, g.subject.code];
+      const cs = classSubjects.find((cs) => cs.subject.name === name);
+      return [name, cs ? cs.subject.code : name.slice(0, 4).toUpperCase()];
     })
   );
   const subjectCount = subjectNames.length;
@@ -614,7 +688,7 @@ async function buildExamAnalysis(classRoomId, examId) {
   const gradeCount = () => Object.fromEntries(bands.map((b) => [b.grade, 0]));
 
   // Per-subject aggregates: mean score, and grade distribution overall + by gender
-  const subjectStats = subjectNames.map((name) => {
+  const subjectStats = subjectNames.filter((name) => gradedSubjectNames.includes(name)).map((name) => {
     const subjectGrades = grades.filter((g) => g.subject.name === name);
     const total = subjectGrades.reduce((s, g) => s + g.score, 0);
     const max = subjectGrades.reduce((s, g) => s + g.maxScore, 0);
