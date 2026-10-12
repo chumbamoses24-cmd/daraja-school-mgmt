@@ -1010,6 +1010,27 @@ export default function Grades() {
                 </button>
               </div>
             </div>
+            {reportCard.previousComparison && (
+              <div className="flex items-center justify-between text-sm bg-paper border border-line rounded-lg px-4 py-2 mb-4">
+                <span className="text-slate/70">
+                  vs. {reportCard.previousComparison.examLabel}: {reportCard.previousComparison.meanScore ?? "—"}%
+                  {reportCard.previousComparison.position
+                    ? ` · was ${reportCard.previousComparison.position}/${reportCard.previousComparison.classSize}`
+                    : ""}
+                </span>
+                <span
+                  className={`font-semibold ${
+                    reportCard.previousComparison.trend === "IMPROVED"
+                      ? "text-moss"
+                      : reportCard.previousComparison.trend === "DROPPED"
+                      ? "text-rust"
+                      : "text-slate/60"
+                  }`}
+                >
+                  {reportCard.previousComparison.trend}
+                </span>
+              </div>
+            )}
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-left text-slate/50 uppercase text-xs tracking-wider border-b border-line">
@@ -1017,7 +1038,7 @@ export default function Grades() {
                   <th className="py-2">Score</th>
                   <th className="py-2">%</th>
                   <th className="py-2">Grade</th>
-                  <th className="py-2">Remarks</th>
+                  <th className="py-2">Teacher</th>
                 </tr>
               </thead>
               <tbody>
@@ -1027,11 +1048,17 @@ export default function Grades() {
                     <td className="py-2">{subj.score}/{subj.maxScore}</td>
                     <td className="py-2">{subj.percentage}%</td>
                     <td className="py-2 font-medium">{subj.grade}</td>
-                    <td className="py-2 text-slate/60">{subj.remarks || "—"}</td>
+                    <td className="py-2 text-slate/60">{subj.teacher || "—"}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
+            {reportCard.classTeacherComment && (
+              <div className="mt-4 pt-4 border-t border-line text-sm">
+                <span className="text-slate/50 uppercase text-xs tracking-wider">Class Teacher's Remarks: </span>
+                <span className="italic text-slate/80">{reportCard.classTeacherComment}</span>
+              </div>
+            )}
           </div>
         )}
       </div>

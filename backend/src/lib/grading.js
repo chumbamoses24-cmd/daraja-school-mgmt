@@ -35,4 +35,24 @@ function gradeForPercent(percent, bands) {
   return lowest ? { grade: lowest.grade, points: lowest.points } : { grade: "-", points: 0 };
 }
 
-module.exports = { getGradingSystem, gradeForPercent, DEFAULT_BANDS };
+// Auto-generated class teacher's remark, banded on the student's total points across all
+// subjects (not mean points) — replaces the handwritten remarks line on the report card.
+// Bands are in descending order; the first one the total points clears wins.
+const COMMENT_BANDS = [
+  { min: 68, comment: "Consistently excels beyond expectations; a model of excellence and inspiration to peers, Good work!" },
+  { min: 60, comment: "Demonstrates creativity, initiative, and strong mastery of skills" },
+  { min: 52, comment: "Works well with independence. Has potential to improve" },
+  { min: 43, comment: "Shows reliable effort and understanding; can do better!" },
+  { min: 34, comment: "Demonstrates growing independence in learning; work to meet expectation" },
+  { min: 25, comment: "Beginning to grasp key ideas with support; steady practice will strengthen confidence and improve performance" },
+  { min: 16, comment: "Shows limited progress; continued effort and reinforcement are needed" },
+  { min: 9, comment: "Put more effort; requires close guidance and consistent support." },
+];
+
+function classTeacherComment(totalPoints) {
+  if (totalPoints == null) return "";
+  const band = COMMENT_BANDS.find((b) => totalPoints >= b.min);
+  return band ? band.comment : "";
+}
+
+module.exports = { getGradingSystem, gradeForPercent, DEFAULT_BANDS, classTeacherComment };

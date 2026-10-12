@@ -3,7 +3,7 @@ const PDFDocument = require("pdfkit");
 const { z } = require("zod");
 const prisma = require("../lib/prisma");
 const { requireAuth, requireRole } = require("../middleware/auth");
-const { getGradingSystem, gradeForPercent } = require("../lib/grading");
+const { getGradingSystem, gradeForPercent, classTeacherComment } = require("../lib/grading");
 const { sortByAdmissionNo } = require("../lib/sort");
 const { sortBySubjectOrder } = require("../lib/subjectOrder");
 
@@ -22,6 +22,53 @@ async function getSchoolBranding() {
     headTeacherName: settings?.headTeacherName || null,
     closingDate: settings?.closingDate || null,
     nextTermBegins: settings?.nextTermBegins || null,
+  };
+}
+
+// Finds the most recent exam (by year, then term) strictly before the given one that this
+// student has at least one grade recorded for, and summarizes how they did — mean score, and
+// position/class size when that's still recoverable (it is as long as the student hasn't since
+// moved to a different class; Student only tracks its *current* classRoomId, not history).
+// Returns null if there's no earlier graded exam to compare against (e.g. their first exam).
+async function buildPreviousComparison(student, currentExam) {
+  const priorGrades = await prisma.grade.findMany({
+    where: {
+      studentId: student.id,
+      OR: [
+        { exam: { year: { lt: currentExam.year } } },
+        { exam: { year: currentExam.year, term: { lt: currentExam.term } } },
+      ],
+    },
+    include: { exam: true },
+    orderBy: [{ exam: { year: "desc" } }, { exam: { term: "desc" } }],
+  });
+  if (priorGrades.length === 0) return null;
+
+  const previousExam = priorGrades[0].exam;
+  const examGrades = priorGrades.filter((g) => g.examId === previousExam.id);
+  const totalMax = examGrades.reduce((s, g) => s + g.maxScore, 0);
+  const meanScore = totalMax
+    ? Math.round((examGrades.reduce((s, g) => s + g.score, 0) / totalMax) * 100)
+    : null;
+
+  let position = null;
+  let classSize = null;
+  try {
+    const previousAnalysis = await buildExamAnalysis(previousExam.classRoomId, previousExam.id);
+    const row = previousAnalysis.students.find((s) => s.id === student.id);
+    if (row) {
+      position = row.position;
+      classSize = previousAnalysis.students.length;
+    }
+  } catch {
+    // Previous class/exam no longer resolvable — still show the mean score comparison.
+  }
+
+  return {
+    examLabel: `${previousExam.name} (T${previousExam.term} ${previousExam.year})`,
+    meanScore,
+    position,
+    classSize,
   };
 }
 
@@ -48,14 +95,31 @@ async function buildReportCard(studentId, examId, requestUser) {
   }
   if (!student.classRoomId) throw { status: 400, message: "This student is not assigned to a class" };
 
-  const [analysis, bands] = await Promise.all([
+  const [analysis, bands, previousComparison] = await Promise.all([
     buildExamAnalysis(student.classRoomId, examId),
     getGradingSystem(),
+    buildPreviousComparison(student, exam),
   ]);
   const row = analysis.students.find((s) => s.id === studentId);
   if (!row) throw { status: 404, message: "No results found for this student in this exam" };
 
   const average = row.meanScore ?? 0;
+  const trend =
+    previousComparison?.meanScore == null
+      ? null
+      : average > previousComparison.meanScore
+      ? "IMPROVED"
+      : average < previousComparison.meanScore
+      ? "DROPPED"
+      : "SAME";
+
+  // Only this student's own classroom's assignments — a sibling stream (e.g. Grade 8 West)
+  // may have a different teacher for the same subject than this student's stream.
+  const teacherBySubject = Object.fromEntries(
+    analysis.classSubjectTeachers
+      .filter((cs) => cs.classRoomId === student.classRoomId)
+      .map((cs) => [cs.subjectName, cs.teacherName])
+  );
 
   return {
     student: {
@@ -73,6 +137,7 @@ async function buildReportCard(studentId, examId, requestUser) {
       maxScore: s.maxScore,
       percentage: s.score != null && s.maxScore ? Math.round((s.score / s.maxScore) * 100) : null,
       grade: s.grade,
+      teacher: teacherBySubject[s.subject] || null,
     })),
     totalScore: row.totalScore,
     totalPoints: row.totalPoints,
@@ -81,6 +146,8 @@ async function buildReportCard(studentId, examId, requestUser) {
     classSize: analysis.students.length,
     average,
     overallGrade: gradeForPercent(average, bands).grade,
+    previousComparison: previousComparison ? { ...previousComparison, trend } : null,
+    classTeacherComment: classTeacherComment(row.totalPoints),
   };
 }
 
@@ -508,27 +575,35 @@ function drawReportCardPage(doc, data, branding = { schoolName: "My School", log
   drawInfoCell(margin, infoColW[0], "TOTAL POINTS:", data.totalPoints);
   drawInfoCell(margin + infoColW[0], infoColW[1], "POSITION:", `${data.position ?? "—"} out of ${data.classSize}`);
   drawInfoCell(margin + infoColW[0] + infoColW[1], infoColW[2], "LEVEL:", data.overallGrade);
+  y += infoRowHeight;
+
+  // Comparison against the student's last exam, where one exists — blank (first exam on record)
+  // otherwise rather than showing a misleading dash for every field.
+  const prev = data.previousComparison;
+  drawInfoCell(margin, infoColW[0], "PREVIOUS EXAM:", prev ? `${prev.examLabel} — ${prev.meanScore ?? "—"}%` : "—");
+  drawInfoCell(margin + infoColW[0], infoColW[1], "PREV. POSITION:", prev?.position ? `${prev.position}/${prev.classSize}` : "—");
+  drawInfoCell(margin + infoColW[0] + infoColW[1], infoColW[2], "TREND:", prev?.trend || "—");
   y += infoRowHeight + 16;
 
   doc.font("Helvetica-Bold").fontSize(11).text("BREAKDOWN", margin, y);
   y += 20;
 
   // Breakdown table — fixed columns, bordered, plain lines (no highlighted banding)
-  const colW = { subject: 270, marks: 112, level: 113 };
+  const colW = { subject: 190, marks: 85, level: 80, teacher: 140 };
   const rowHeight = 22;
   const drawRow = (cells, { header = false } = {}) => {
     doc.font(header ? "Helvetica-Bold" : "Helvetica").fontSize(9.5).fillColor(REPORT_SLATE);
     let x = margin;
-    [["subject", cells[0]], ["marks", cells[1]], ["level", cells[2]]].forEach(([key, text]) => {
+    [["subject", cells[0]], ["marks", cells[1]], ["level", cells[2]], ["teacher", cells[3]]].forEach(([key, text]) => {
       doc.rect(x, y, colW[key], rowHeight).strokeColor(REPORT_BORDER).lineWidth(0.75).stroke();
       doc.text(String(text ?? ""), x + 6, y + 6, { width: colW[key] - 10 });
       x += colW[key];
     });
     y += rowHeight;
   };
-  drawRow(["SUBJECT", "MARKS", "LEVEL"], { header: true });
+  drawRow(["SUBJECT", "MARKS", "LEVEL", "TEACHER"], { header: true });
   data.subjects.forEach((s) => {
-    drawRow([s.subject, s.score ?? "", s.grade ?? ""]);
+    drawRow([s.subject, s.score ?? "", s.grade ?? "", s.teacher ?? "—"]);
   });
   y += 20;
 
@@ -549,9 +624,10 @@ function drawReportCardPage(doc, data, branding = { schoolName: "My School", log
   }
   y += 30;
 
-  // Class teacher's remarks — left blank for handwriting, matching the paper form
+  // Class teacher's remarks — auto-generated from the student's total points, replacing the
+  // handwritten line on the paper form. Wraps onto the dotted line below if it runs long.
   doc.font("Helvetica-Bold").fontSize(9.5).fillColor(REPORT_SLATE).text("CLASS TEACHER'S REMARKS:", margin, y);
-  dottedLine(doc, margin + 175, margin + pageWidth, y + 8);
+  doc.font("Helvetica-Oblique").fontSize(9).text(data.classTeacherComment || "", margin + 175, y, { width: margin + pageWidth - (margin + 175) });
   y += 20;
   dottedLine(doc, margin, margin + pageWidth, y + 8);
   y += 32;
@@ -659,7 +735,10 @@ async function buildExamAnalysis(classRoomId, examId) {
   const [students, grades, classSubjects, bands] = await Promise.all([
     prisma.student.findMany({ where: { classRoomId: { in: siblingClassRoomIds } } }),
     prisma.grade.findMany({ where: { examId: { in: examIds } }, include: { subject: true, student: true } }),
-    prisma.classSubject.findMany({ where: { classRoomId: { in: siblingClassRoomIds } }, include: { subject: true } }),
+    prisma.classSubject.findMany({
+      where: { classRoomId: { in: siblingClassRoomIds } },
+      include: { subject: true, teacher: { select: { firstName: true, lastName: true } } },
+    }),
     getGradingSystem(),
   ]);
   const sortedStudents = sortByAdmissionNo(students);
@@ -780,11 +859,21 @@ async function buildExamAnalysis(classRoomId, examId) {
   // separate from `subjects` below, which is sorted by mean score for the subject-ranking view.
   const subjectColumns = subjectNames.map((name) => ({ name, code: subjectCodeByName[name] }));
 
+  // Raw class→subject→teacher assignments, kept per-stream (not deduped like subjectColumns)
+  // so buildReportCard can look up the right teacher for a specific student's own classroom —
+  // two streams of the same level can have different teachers for the same subject.
+  const classSubjectTeachers = classSubjects.map((cs) => ({
+    classRoomId: cs.classRoomId,
+    subjectName: cs.subject.name,
+    teacherName: cs.teacher ? `${cs.teacher.firstName} ${cs.teacher.lastName}` : null,
+  }));
+
   return {
     exam,
     classRoom: { name: isMultiStream ? exam.classRoom.level : exam.classRoom.name, level: exam.classRoom.level, isMultiStream },
     subjectCount,
     subjectColumns,
+    classSubjectTeachers,
     totalMarks,
     classMeanScore,
     classMeanPoints,
