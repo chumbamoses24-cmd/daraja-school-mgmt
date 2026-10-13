@@ -6,13 +6,28 @@ function GradeDistributionTable({ distribution }) {
   const grades = Object.keys(distribution);
   const total = Object.values(distribution).reduce((s, v) => s + v, 0);
   return (
-    <div className="flex flex-wrap gap-2">
-      {grades.map((g) => (
-        <div key={g} className="pill border border-line bg-white">
-          {g}: <span className="font-mono">{distribution[g]}</span>
-          {total > 0 && <span className="text-slate/40"> ({Math.round((distribution[g] / total) * 100)}%)</span>}
-        </div>
-      ))}
+    <div className="overflow-x-auto">
+      <table className="text-sm border border-collapse border-line">
+        <thead>
+          <tr>
+            {grades.map((g) => (
+              <th key={g} className="border border-line bg-line/20 py-1 px-3 text-xs uppercase tracking-wider text-slate/60">
+                {g}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            {grades.map((g) => (
+              <td key={g} className="border border-line py-1 px-3 font-mono text-center whitespace-nowrap">
+                {distribution[g]}
+                {total > 0 && <span className="text-slate/40 text-xs"> ({Math.round((distribution[g] / total) * 100)}%)</span>}
+              </td>
+            ))}
+          </tr>
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -288,42 +303,42 @@ export default function ClassAnalysis() {
 
             {/* Merit list */}
             <div className="card overflow-x-auto mb-8">
-              <table className="w-full text-sm">
+              <table className="w-full text-sm border border-collapse border-line">
                 <thead>
-                  <tr className="text-left text-slate/50 uppercase text-xs tracking-wider border-b border-line bg-line/20">
-                    <th className="py-2 px-3">Pos</th>
-                    <th className="py-2 px-3">Adm No</th>
-                    <th className="py-2 px-3">Name</th>
+                  <tr className="text-left text-slate/50 uppercase text-xs tracking-wider bg-line/20">
+                    <th className="py-2 px-3 border border-line">Pos</th>
+                    <th className="py-2 px-3 border border-line">Adm No</th>
+                    <th className="py-2 px-3 border border-line">Name</th>
                     {examAnalysis.subjectColumns.map((s) => (
-                      <th key={s.name} className="py-2 px-3 whitespace-nowrap" title={s.name}>{s.code}</th>
+                      <th key={s.name} className="py-2 px-3 border border-line whitespace-nowrap" title={s.name}>{s.code}</th>
                     ))}
-                    <th className="py-2 px-3">Total</th>
-                    <th className="py-2 px-3">Mean %</th>
-                    <th className="py-2 px-3">Pts</th>
-                    <th className="py-2 px-3">Mean Pts</th>
+                    <th className="py-2 px-3 border border-line">Total</th>
+                    <th className="py-2 px-3 border border-line">Mean %</th>
+                    <th className="py-2 px-3 border border-line">Pts</th>
+                    <th className="py-2 px-3 border border-line">Mean Pts</th>
                   </tr>
                 </thead>
                 <tbody>
                   {examAnalysis.students.map((s) => (
-                    <tr key={s.id} className="border-b border-line/60 hover:bg-line/10">
-                      <td className="py-2 px-3 font-mono">{s.position ?? "—"}</td>
-                      <td className="py-2 px-3 font-mono text-xs text-slate/60">{s.admissionNo}</td>
-                      <td className="py-2 px-3">
+                    <tr key={s.id} className="hover:bg-line/10">
+                      <td className="py-2 px-3 border border-line font-mono">{s.position ?? "—"}</td>
+                      <td className="py-2 px-3 border border-line font-mono text-xs text-slate/60">{s.admissionNo}</td>
+                      <td className="py-2 px-3 border border-line">
                         <Link to={`/students/${s.id}`} className="hover:underline text-ink whitespace-nowrap">{s.name}</Link>
                       </td>
                       {s.subjects.map((sub) => (
-                        <td key={sub.subject} className="py-2 px-3 whitespace-nowrap">
+                        <td key={sub.subject} className="py-2 px-3 border border-line whitespace-nowrap">
                           {sub.score != null ? `${sub.score} (${sub.grade})` : "—"}
                         </td>
                       ))}
-                      <td className="py-2 px-3 font-mono">{s.totalScore}</td>
-                      <td className="py-2 px-3 font-mono">{s.meanScore != null ? `${s.meanScore}%` : "—"}</td>
-                      <td className="py-2 px-3 font-mono">{s.totalPoints}</td>
-                      <td className="py-2 px-3 font-mono">{s.meanPoints ?? "—"}</td>
+                      <td className="py-2 px-3 border border-line font-mono">{s.totalScore}</td>
+                      <td className="py-2 px-3 border border-line font-mono">{s.meanScore != null ? `${s.meanScore}%` : "—"}</td>
+                      <td className="py-2 px-3 border border-line font-mono">{s.totalPoints}</td>
+                      <td className="py-2 px-3 border border-line font-mono">{s.meanPoints ?? "—"}</td>
                     </tr>
                   ))}
                   {examAnalysis.students.length === 0 && (
-                    <tr><td colSpan={7 + examAnalysis.subjects.length} className="py-6 text-center text-slate/50">No students in this class yet.</td></tr>
+                    <tr><td colSpan={7 + examAnalysis.subjects.length} className="py-6 text-center text-slate/50 border border-line">No students in this class yet.</td></tr>
                   )}
                 </tbody>
               </table>

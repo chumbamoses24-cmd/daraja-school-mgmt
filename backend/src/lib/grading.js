@@ -55,4 +55,23 @@ function classTeacherComment(totalPoints) {
   return band ? band.comment : "";
 }
 
-module.exports = { getGradingSystem, gradeForPercent, DEFAULT_BANDS, classTeacherComment };
+// Auto-generated head teacher's remark — same point thresholds as the class teacher's comment,
+// but a shorter, coarser phrase. A total of 0 (or no grades recorded) is left blank.
+const HEAD_TEACHER_COMMENT_BANDS = [
+  { min: 68, comment: "Excellent performance!" },
+  { min: 60, comment: "Excellent performance!" },
+  { min: 52, comment: "Satisfactory. Work towards exceeding expectations" },
+  { min: 43, comment: "Satisfactory. Work towards exceeding expectations" },
+  { min: 34, comment: "Can do better!" },
+  { min: 25, comment: "Can do better!" },
+  { min: 16, comment: "Aim higher!" },
+  { min: 9, comment: "Aim higher!" },
+];
+
+function headTeacherComment(totalPoints) {
+  if (totalPoints == null || totalPoints === 0) return "";
+  const band = HEAD_TEACHER_COMMENT_BANDS.find((b) => totalPoints >= b.min);
+  return band ? band.comment : "";
+}
+
+module.exports = { getGradingSystem, gradeForPercent, DEFAULT_BANDS, classTeacherComment, headTeacherComment };

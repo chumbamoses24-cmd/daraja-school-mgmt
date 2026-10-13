@@ -1059,6 +1059,12 @@ export default function Grades() {
                 <span className="italic text-slate/80">{reportCard.classTeacherComment}</span>
               </div>
             )}
+            {reportCard.headTeacherComment && (
+              <div className="mt-2 text-sm">
+                <span className="text-slate/50 uppercase text-xs tracking-wider">Head Teacher's Remarks: </span>
+                <span className="italic text-slate/80">{reportCard.headTeacherComment}</span>
+              </div>
+            )}
           </div>
         )}
       </div>

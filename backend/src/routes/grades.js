@@ -3,7 +3,7 @@ const PDFDocument = require("pdfkit");
 const { z } = require("zod");
 const prisma = require("../lib/prisma");
 const { requireAuth, requireRole } = require("../middleware/auth");
-const { getGradingSystem, gradeForPercent, classTeacherComment } = require("../lib/grading");
+const { getGradingSystem, gradeForPercent, classTeacherComment, headTeacherComment } = require("../lib/grading");
 const { sortByAdmissionNo } = require("../lib/sort");
 const { sortBySubjectOrder } = require("../lib/subjectOrder");
 
@@ -148,6 +148,7 @@ async function buildReportCard(studentId, examId, requestUser) {
     overallGrade: gradeForPercent(average, bands).grade,
     previousComparison: previousComparison ? { ...previousComparison, trend } : null,
     classTeacherComment: classTeacherComment(row.totalPoints),
+    headTeacherComment: headTeacherComment(row.totalPoints),
   };
 }
 
@@ -634,6 +635,14 @@ function drawReportCardPage(doc, data, branding = { schoolName: "My School", log
   doc.font("Helvetica-Bold").text("SIGNATURE", margin + 220, y);
   dottedLine(doc, margin + 300, margin + pageWidth, y + 8);
   y += 40;
+
+  // Head teacher's remarks — auto-generated from the student's total points (same bands as the
+  // class teacher's comment, coarser wording), printed just above the head teacher's signature.
+  doc.font("Helvetica-Bold").fontSize(9.5).fillColor(REPORT_SLATE).text("HEAD TEACHER'S REMARKS:", margin, y);
+  doc.font("Helvetica-Oblique").fontSize(9).text(data.headTeacherComment || "", margin + 175, y, { width: margin + pageWidth - (margin + 175) });
+  y += 20;
+  dottedLine(doc, margin, margin + pageWidth, y + 8);
+  y += 32;
 
   dottedLine(doc, margin, margin + 380, y);
   y += 14;
