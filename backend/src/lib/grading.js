@@ -74,4 +74,54 @@ function headTeacherComment(totalPoints) {
   return band ? band.comment : "";
 }
 
-module.exports = { getGradingSystem, gradeForPercent, DEFAULT_BANDS, classTeacherComment, headTeacherComment };
+// Overall "Level" for the merit list / report form — CBC-style band (EE1..BE2) derived from
+// a student's totalPoints (sum of per-subject grade points), using the same thresholds Moses
+// specified. Blank at 0/no grades, same convention as headTeacherComment.
+const LEVEL_BANDS = [
+  { min: 68, level: "EE1" },
+  { min: 60, level: "EE2" },
+  { min: 52, level: "ME1" },
+  { min: 43, level: "ME2" },
+  { min: 34, level: "AE1" },
+  { min: 25, level: "AE2" },
+  { min: 16, level: "BE1" },
+  { min: 9, level: "BE2" },
+];
+
+function levelForPoints(totalPoints) {
+  if (totalPoints == null || totalPoints === 0) return "";
+  const band = LEVEL_BANDS.find((b) => totalPoints >= b.min);
+  return band ? band.level : "";
+}
+
+// Auto-generated per-subject teacher's comment for the report form's BREAKDOWN table, banded
+// on that subject's own letter grade (not the student's cross-subject total). Kept short so it
+// fits a single table cell without wrapping.
+const SUBJECT_COMMENT_BY_GRADE = {
+  A: "Excellent, keep it up!",
+  "A-": "Excellent, keep it up!",
+  "B+": "Very good work",
+  B: "Very good work",
+  "B-": "Good, aim higher",
+  "C+": "Good, aim higher",
+  C: "Satisfactory, needs practice",
+  "C-": "Satisfactory, needs practice",
+  "D+": "Below average, needs support",
+  D: "Below average, needs support",
+  "D-": "Weak, needs close attention",
+  E: "Weak, needs close attention",
+};
+
+function subjectComment(grade) {
+  return SUBJECT_COMMENT_BY_GRADE[grade] || "";
+}
+
+module.exports = {
+  getGradingSystem,
+  gradeForPercent,
+  DEFAULT_BANDS,
+  classTeacherComment,
+  headTeacherComment,
+  levelForPoints,
+  subjectComment,
+};

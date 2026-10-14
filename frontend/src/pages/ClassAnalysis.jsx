@@ -301,7 +301,8 @@ export default function ClassAnalysis() {
               )}
             </div>
 
-            {/* Merit list */}
+            {/* Merit list — students who never sat this exam (no marks in any subject) are
+                left off; scores shown as percentages, not raw marks. */}
             <div className="card overflow-x-auto mb-8">
               <table className="w-full text-sm border border-collapse border-line">
                 <thead>
@@ -312,14 +313,15 @@ export default function ClassAnalysis() {
                     {examAnalysis.subjectColumns.map((s) => (
                       <th key={s.name} className="py-2 px-3 border border-line whitespace-nowrap" title={s.name}>{s.code}</th>
                     ))}
-                    <th className="py-2 px-3 border border-line">Total</th>
                     <th className="py-2 px-3 border border-line">Mean %</th>
                     <th className="py-2 px-3 border border-line">Pts</th>
                     <th className="py-2 px-3 border border-line">Mean Pts</th>
+                    <th className="py-2 px-3 border border-line">Level</th>
+                    <th className="py-2 px-3 border border-line">Dev.</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {examAnalysis.students.map((s) => (
+                  {examAnalysis.students.filter((s) => s.sat).map((s) => (
                     <tr key={s.id} className="hover:bg-line/10">
                       <td className="py-2 px-3 border border-line font-mono">{s.position ?? "—"}</td>
                       <td className="py-2 px-3 border border-line font-mono text-xs text-slate/60">{s.admissionNo}</td>
@@ -328,17 +330,40 @@ export default function ClassAnalysis() {
                       </td>
                       {s.subjects.map((sub) => (
                         <td key={sub.subject} className="py-2 px-3 border border-line whitespace-nowrap">
-                          {sub.score != null ? `${sub.score} (${sub.grade})` : "—"}
+                          {sub.percentage != null ? `${sub.percentage}% (${sub.grade})` : "—"}
                         </td>
                       ))}
-                      <td className="py-2 px-3 border border-line font-mono">{s.totalScore}</td>
                       <td className="py-2 px-3 border border-line font-mono">{s.meanScore != null ? `${s.meanScore}%` : "—"}</td>
                       <td className="py-2 px-3 border border-line font-mono">{s.totalPoints}</td>
                       <td className="py-2 px-3 border border-line font-mono">{s.meanPoints ?? "—"}</td>
+                      <td className="py-2 px-3 border border-line font-mono">{s.level || "—"}</td>
+                      <td className="py-2 px-3 border border-line font-mono">
+                        {s.deviation == null ? "—" : s.deviation > 0 ? `+${s.deviation}` : s.deviation}
+                      </td>
                     </tr>
                   ))}
-                  {examAnalysis.students.length === 0 && (
-                    <tr><td colSpan={7 + examAnalysis.subjects.length} className="py-6 text-center text-slate/50 border border-line">No students in this class yet.</td></tr>
+                  {examAnalysis.students.filter((s) => s.sat).length === 0 && (
+                    <tr><td colSpan={8 + examAnalysis.subjectColumns.length} className="py-6 text-center text-slate/50 border border-line">No students have sat this exam yet.</td></tr>
+                  )}
+                  {examAnalysis.students.some((s) => s.sat) && (
+                    <tr className="bg-line/10 font-semibold">
+                      <td className="py-2 px-3 border border-line" colSpan={3}>Average</td>
+                      {examAnalysis.subjectColumns.map((col) => {
+                        const subj = examAnalysis.subjects.find((s) => s.subject === col.name);
+                        return (
+                          <td key={col.name} className="py-2 px-3 border border-line font-mono">
+                            {subj ? `${subj.mean}%` : "—"}
+                          </td>
+                        );
+                      })}
+                      <td className="py-2 px-3 border border-line font-mono">
+                        {examAnalysis.classMeanScore != null ? `${examAnalysis.classMeanScore}%` : "—"}
+                      </td>
+                      <td className="py-2 px-3 border border-line"></td>
+                      <td className="py-2 px-3 border border-line font-mono">{examAnalysis.classMeanPoints ?? "—"}</td>
+                      <td className="py-2 px-3 border border-line"></td>
+                      <td className="py-2 px-3 border border-line"></td>
+                    </tr>
                   )}
                 </tbody>
               </table>

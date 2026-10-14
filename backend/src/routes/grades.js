@@ -3,7 +3,14 @@ const PDFDocument = require("pdfkit");
 const { z } = require("zod");
 const prisma = require("../lib/prisma");
 const { requireAuth, requireRole } = require("../middleware/auth");
-const { getGradingSystem, gradeForPercent, classTeacherComment, headTeacherComment } = require("../lib/grading");
+const {
+  getGradingSystem,
+  gradeForPercent,
+  classTeacherComment,
+  headTeacherComment,
+  levelForPoints,
+  subjectComment,
+} = require("../lib/grading");
 const { sortByAdmissionNo } = require("../lib/sort");
 const { sortBySubjectOrder } = require("../lib/subjectOrder");
 
@@ -138,6 +145,7 @@ async function buildReportCard(studentId, examId, requestUser) {
       percentage: s.score != null && s.maxScore ? Math.round((s.score / s.maxScore) * 100) : null,
       grade: s.grade,
       teacher: teacherBySubject[s.subject] || null,
+      comment: subjectComment(s.grade),
     })),
     totalScore: row.totalScore,
     totalPoints: row.totalPoints,
@@ -589,22 +597,24 @@ function drawReportCardPage(doc, data, branding = { schoolName: "My School", log
   doc.font("Helvetica-Bold").fontSize(11).text("BREAKDOWN", margin, y);
   y += 20;
 
-  // Breakdown table — fixed columns, bordered, plain lines (no highlighted banding)
-  const colW = { subject: 190, marks: 85, level: 80, teacher: 140 };
+  // Breakdown table — fixed columns, bordered, plain lines (no highlighted banding). COMMENT
+  // is auto-generated per subject (subjectComment() in grading.js), banded on that subject's
+  // own grade, so it fits one line without wrapping.
+  const colW = { subject: 140, marks: 55, level: 50, teacher: 90, comment: 160 };
   const rowHeight = 22;
   const drawRow = (cells, { header = false } = {}) => {
-    doc.font(header ? "Helvetica-Bold" : "Helvetica").fontSize(9.5).fillColor(REPORT_SLATE);
+    doc.font(header ? "Helvetica-Bold" : "Helvetica").fontSize(header ? 9.5 : 8.5).fillColor(REPORT_SLATE);
     let x = margin;
-    [["subject", cells[0]], ["marks", cells[1]], ["level", cells[2]], ["teacher", cells[3]]].forEach(([key, text]) => {
+    [["subject", cells[0]], ["marks", cells[1]], ["level", cells[2]], ["teacher", cells[3]], ["comment", cells[4]]].forEach(([key, text]) => {
       doc.rect(x, y, colW[key], rowHeight).strokeColor(REPORT_BORDER).lineWidth(0.75).stroke();
-      doc.text(String(text ?? ""), x + 6, y + 6, { width: colW[key] - 10 });
+      doc.text(String(text ?? ""), x + 5, y + 6, { width: colW[key] - 8 });
       x += colW[key];
     });
     y += rowHeight;
   };
-  drawRow(["SUBJECT", "MARKS", "LEVEL", "TEACHER"], { header: true });
+  drawRow(["SUBJECT", "MARKS", "LEVEL", "TEACHER", "COMMENT"], { header: true });
   data.subjects.forEach((s) => {
-    drawRow([s.subject, s.score ?? "", s.grade ?? "", s.teacher ?? "—"]);
+    drawRow([s.subject, s.score ?? "", s.grade ?? "", s.teacher ?? "—", s.comment ?? ""]);
   });
   y += 20;
 
@@ -752,6 +762,40 @@ async function buildExamAnalysis(classRoomId, examId) {
   ]);
   const sortedStudents = sortByAdmissionNo(students);
 
+  // Previous-exam deviation — mean % for each student on the most recent earlier exam for this
+  // class (by year/term), so the merit list can show how each student moved since last time.
+  // Deliberately lightweight (just score totals, not a full buildExamAnalysis) to avoid deep
+  // recursion through a school's exam history. Blank/empty if there's no earlier exam yet.
+  let previousMeanByStudent = {};
+  try {
+    const priorExams = await prisma.exam.findMany({
+      where: {
+        classRoomId: { in: siblingClassRoomIds },
+        OR: [{ year: { lt: exam.year } }, { year: exam.year, term: { lt: exam.term } }],
+      },
+      orderBy: [{ year: "desc" }, { term: "desc" }],
+    });
+    if (priorExams.length) {
+      const prevExam = priorExams[0];
+      const prevSiblingExams = await prisma.exam.findMany({
+        where: { name: prevExam.name, term: prevExam.term, year: prevExam.year, classRoomId: { in: siblingClassRoomIds } },
+      });
+      const prevExamIds = prevSiblingExams.length ? prevSiblingExams.map((e) => e.id) : [prevExam.id];
+      const prevGrades = await prisma.grade.findMany({ where: { examId: { in: prevExamIds } } });
+      const byStudent = {};
+      prevGrades.forEach((g) => {
+        if (!byStudent[g.studentId]) byStudent[g.studentId] = { total: 0, max: 0 };
+        byStudent[g.studentId].total += g.score;
+        byStudent[g.studentId].max += g.maxScore;
+      });
+      Object.entries(byStudent).forEach(([sid, { total, max }]) => {
+        previousMeanByStudent[Number(sid)] = max ? Math.round((total / max) * 100) : null;
+      });
+    }
+  } catch {
+    // No earlier exam, or it's no longer resolvable — deviations stay blank.
+  }
+
   // Subject columns come from what's actually assigned to the class, not just what's been
   // graded so far — so the breakdown table (and report card) always shows every subject the
   // class takes, blank where marks haven't been entered yet, instead of that subject's column
@@ -802,10 +846,10 @@ async function buildExamAnalysis(classRoomId, examId) {
     const sGrades = grades.filter((g) => g.studentId === s.id);
     const subjects = subjectNames.map((name) => {
       const g = sGrades.find((gr) => gr.subject.name === name);
-      if (!g) return { subject: name, code: subjectCodeByName[name], score: null, maxScore: null, grade: null, points: null };
+      if (!g) return { subject: name, code: subjectCodeByName[name], score: null, maxScore: null, percentage: null, grade: null, points: null };
       const pct = (g.score / g.maxScore) * 100;
       const { grade, points } = gradeForPercent(pct, bands);
-      return { subject: name, code: subjectCodeByName[name], score: g.score, maxScore: g.maxScore, grade, points };
+      return { subject: name, code: subjectCodeByName[name], score: g.score, maxScore: g.maxScore, percentage: Math.round(pct), grade, points };
     });
     const totalScore = sGrades.reduce((sum, g) => sum + g.score, 0);
     const totalMax = sGrades.reduce((sum, g) => sum + g.maxScore, 0);
@@ -813,6 +857,8 @@ async function buildExamAnalysis(classRoomId, examId) {
     const totalPoints = subjects.reduce((sum, sub) => sum + (sub.points || 0), 0);
     const gradedSubjectCount = subjects.filter((sub) => sub.points != null).length;
     const meanPoints = gradedSubjectCount ? Number((totalPoints / gradedSubjectCount).toFixed(2)) : null;
+    const previousMeanScore = previousMeanByStudent[s.id] ?? null;
+    const deviation = meanScore != null && previousMeanScore != null ? meanScore - previousMeanScore : null;
 
     return {
       id: s.id,
@@ -825,6 +871,10 @@ async function buildExamAnalysis(classRoomId, examId) {
       meanScore,
       totalPoints,
       meanPoints,
+      level: levelForPoints(totalPoints),
+      previousMeanScore,
+      deviation,
+      sat: gradedSubjectCount > 0,
     };
   });
 
@@ -937,7 +987,10 @@ function drawPdfHeader(doc, title, subtitle, pageWidth, margin, branding) {
   return titleY + 55; // y position callers should start drawing content from
 }
 
-// Downloadable merit list PDF — position, per-subject score+grade, totals, points.
+// Downloadable merit list PDF — position, per-subject percentage+grade, points, level, and
+// deviation from the student's previous exam. Students who never sat this exam (no marks in
+// any subject) are left off, same as the on-screen preview. Fits on one landscape page: tight
+// column widths, small font, and a bordered grid (no zebra striping) per Moses's request.
 router.get("/exam-analysis/:classRoomId/:examId/merit-list/pdf", requireRole("ADMIN", "TEACHER"), async (req, res) => {
   let data;
   try {
@@ -947,12 +1000,14 @@ router.get("/exam-analysis/:classRoomId/:examId/merit-list/pdf", requireRole("AD
     if (err.status) return res.status(err.status).json({ error: err.message });
     throw err;
   }
+  const meritStudents = data.students.filter((s) => s.sat);
+  const subjectMeanByName = Object.fromEntries(data.subjects.map((s) => [s.subject, s.mean]));
 
   const fileName = `${data.classRoom.name.replace(/\s+/g, "-").toLowerCase()}-merit-list.pdf`;
   res.setHeader("Content-Type", "application/pdf");
   res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
 
-  const margin = 30;
+  const margin = 24;
   const doc = new PDFDocument({ size: "A4", layout: "landscape", margin });
   doc.pipe(res);
   const pageWidth = doc.page.width - margin * 2;
@@ -960,58 +1015,101 @@ router.get("/exam-analysis/:classRoomId/:examId/merit-list/pdf", requireRole("AD
 
   const contentY = drawPdfHeader(doc, `${data.classRoom.name} — Merit List`, `${data.exam.name} — Term ${data.exam.term}, ${data.exam.year}`, pageWidth, margin, branding);
 
-  const subjectColWidth = Math.min(70, (pageWidth - 260) / Math.max(data.subjectCount, 1));
-  const col = { pos: margin, adm: margin + 30, name: margin + 85, subjectsStart: margin + 220 };
+  // Fixed-width columns on the left (pos/adm/name) and right (mean/pts/m.pts/level/dev); the
+  // subject columns split whatever width is left so the whole table fits on one page.
+  const col = { pos: margin, adm: margin + 20, name: margin + 60 };
+  const rightColW = { mean: 36, pts: 24, mpts: 32, level: 30, dev: 28 };
+  const rightTotalW = Object.values(rightColW).reduce((a, b) => a + b, 0);
+  const subjectsStart = margin + 150;
+  const subjectColWidth = Math.max(26, Math.min(56, (pageWidth - 150 - rightTotalW) / Math.max(data.subjectCount, 1)));
+  const totalsX = subjectsStart + data.subjectCount * subjectColWidth;
+  const rightX = {
+    mean: totalsX,
+    pts: totalsX + rightColW.mean,
+    mpts: totalsX + rightColW.mean + rightColW.pts,
+    level: totalsX + rightColW.mean + rightColW.pts + rightColW.mpts,
+    dev: totalsX + rightColW.mean + rightColW.pts + rightColW.mpts + rightColW.level,
+  };
+  const tableRight = rightX.dev + rightColW.dev;
   let y = contentY;
 
   function drawHeaderRow() {
-    doc.fillColor("#FFFFFF").rect(margin, y, pageWidth, 20).fill(PDF_INK);
-    doc.fillColor("#FFFFFF").fontSize(7).font("Helvetica-Bold");
-    doc.text("POS", col.pos + 2, y + 6);
-    doc.text("ADM NO", col.adm, y + 6);
-    doc.text("NAME", col.name, y + 6);
-    // IMPORTANT: header columns must come from subjectColumns (fixed SUBJECT_ORDER), the same
-    // order each student row's `subjects` array is built in (see buildExamAnalysis). Using the
-    // mean-ranked `data.subjects` here was the bug: that array's order shifts per exam based on
-    // which subject scored highest, while row data stayed in fixed order — so headers and marks
-    // drifted out of sync (e.g. a CRE mark appearing under a Biology or Math header).
+    doc.fillColor("#FFFFFF").rect(margin, y, tableRight - margin, 18).fill(PDF_INK);
+    doc.fillColor("#FFFFFF").fontSize(6.5).font("Helvetica-Bold");
+    doc.text("POS", col.pos + 2, y + 6, { width: 18 });
+    doc.text("ADM NO", col.adm, y + 6, { width: 40 });
+    doc.text("NAME", col.name, y + 6, { width: 88 });
+    // Headers must follow subjectColumns (fixed SUBJECT_ORDER), the same order each row's
+    // `subjects` array is built in — not the mean-ranked `data.subjects` (see buildExamAnalysis).
     data.subjectColumns.forEach((s, i) => {
-      doc.text((s.code || s.name).toUpperCase(), col.subjectsStart + i * subjectColWidth, y + 6, { width: subjectColWidth - 2 });
+      doc.text((s.code || s.name).toUpperCase(), subjectsStart + i * subjectColWidth, y + 6, { width: subjectColWidth - 2 });
     });
-    const totalsX = col.subjectsStart + data.subjectCount * subjectColWidth;
-    doc.text("TOT", totalsX, y + 6);
-    doc.text("MEAN%", totalsX + 35, y + 6);
-    doc.text("PTS", totalsX + 75, y + 6);
-    doc.text("M.PTS", totalsX + 105, y + 6);
-    y += 20;
+    doc.text("MEAN%", rightX.mean, y + 6, { width: rightColW.mean - 2 });
+    doc.text("PTS", rightX.pts, y + 6, { width: rightColW.pts - 2 });
+    doc.text("M.PTS", rightX.mpts, y + 6, { width: rightColW.mpts - 2 });
+    doc.text("LEVEL", rightX.level, y + 6, { width: rightColW.level - 2 });
+    doc.text("DEV", rightX.dev, y + 6, { width: rightColW.dev - 2 });
+    y += 18;
+  }
+
+  function drawGridRow(rowHeight, { bold = false } = {}) {
+    doc.font(bold ? "Helvetica-Bold" : "Helvetica").fontSize(6.5).fillColor(PDF_SLATE);
+    doc.rect(margin, y, tableRight - margin, rowHeight).strokeColor(PDF_LINE).lineWidth(0.5).stroke();
   }
 
   drawHeaderRow();
-  doc.font("Helvetica").fontSize(7.5);
-  data.students.forEach((s, i) => {
-    if (y > doc.page.height - 40) {
+  meritStudents.forEach((s) => {
+    if (y > doc.page.height - 50) {
       doc.addPage();
       y = margin;
       drawHeaderRow();
-      doc.font("Helvetica").fontSize(7.5);
     }
-    const rowHeight = 16;
-    if (i % 2 === 1) doc.fillColor("#F7F5EE").rect(margin, y, pageWidth, rowHeight).fill();
-    doc.fillColor(PDF_SLATE);
-    doc.text(String(s.position ?? "—"), col.pos + 2, y + 4);
-    doc.text(s.admissionNo, col.adm, y + 4);
-    doc.text(s.name, col.name, y + 4, { width: 130 });
+    const rowHeight = 15;
+    drawGridRow(rowHeight);
+    doc.text(String(s.position ?? "—"), col.pos + 2, y + 4, { width: 18 });
+    doc.text(s.admissionNo, col.adm, y + 4, { width: 40 });
+    doc.text(s.name, col.name, y + 4, { width: 88 });
     s.subjects.forEach((sub, j) => {
-      const text = sub.score != null ? `${sub.score}(${sub.grade})` : "—";
-      doc.text(text, col.subjectsStart + j * subjectColWidth, y + 4, { width: subjectColWidth - 2 });
+      const text = sub.percentage != null ? `${sub.percentage}(${sub.grade})` : "—";
+      doc.text(text, subjectsStart + j * subjectColWidth, y + 4, { width: subjectColWidth - 2 });
     });
-    const totalsX = col.subjectsStart + data.subjectCount * subjectColWidth;
-    doc.text(String(s.totalScore), totalsX, y + 4);
-    doc.text(s.meanScore != null ? `${s.meanScore}%` : "—", totalsX + 35, y + 4);
-    doc.text(String(s.totalPoints), totalsX + 75, y + 4);
-    doc.text(s.meanPoints != null ? String(s.meanPoints) : "—", totalsX + 105, y + 4);
+    doc.text(s.meanScore != null ? `${s.meanScore}%` : "—", rightX.mean, y + 4, { width: rightColW.mean - 2 });
+    doc.text(String(s.totalPoints), rightX.pts, y + 4, { width: rightColW.pts - 2 });
+    doc.text(s.meanPoints != null ? String(s.meanPoints) : "—", rightX.mpts, y + 4, { width: rightColW.mpts - 2 });
+    doc.text(s.level || "—", rightX.level, y + 4, { width: rightColW.level - 2 });
+    const devText = s.deviation == null ? "—" : s.deviation > 0 ? `+${s.deviation}` : String(s.deviation);
+    doc.text(devText, rightX.dev, y + 4, { width: rightColW.dev - 2 });
     y += rowHeight;
   });
+
+  if (meritStudents.length === 0) {
+    doc.fillColor(PDF_SLATE).fontSize(9).font("Helvetica").text("No students have sat this exam yet.", margin, y + 6);
+  } else {
+    // Subject-averages row, directly after the last position.
+    const avgRowHeight = 16;
+    drawGridRow(avgRowHeight, { bold: true });
+    doc.text("AVERAGE", col.name, y + 5, { width: 88 });
+    data.subjectColumns.forEach((s, j) => {
+      const mean = subjectMeanByName[s.name];
+      doc.text(mean != null ? `${mean}%` : "—", subjectsStart + j * subjectColWidth, y + 5, { width: subjectColWidth - 2 });
+    });
+    doc.text(data.classMeanScore != null ? `${data.classMeanScore}%` : "—", rightX.mean, y + 5, { width: rightColW.mean - 2 });
+    doc.text(data.classMeanPoints != null ? String(data.classMeanPoints) : "—", rightX.mpts, y + 5, { width: rightColW.mpts - 2 });
+    y += avgRowHeight + 16;
+
+    // Overall grade distribution, in the same document.
+    if (y > doc.page.height - 60) {
+      doc.addPage();
+      y = margin;
+    }
+    doc.font("Helvetica-Bold").fontSize(9).fillColor(PDF_INK).text("Overall grade distribution", margin, y);
+    y += 14;
+    const distLine = Object.entries(data.classDistribution)
+      .filter(([, count]) => count > 0)
+      .map(([g, count]) => `${g}: ${count}`)
+      .join("   ");
+    doc.font("Helvetica").fontSize(8).fillColor(PDF_SLATE).text(distLine || "No grades recorded", margin, y, { width: pageWidth });
+  }
 
   doc.end();
 });

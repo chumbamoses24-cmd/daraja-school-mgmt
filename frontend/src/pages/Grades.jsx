@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import * as XLSX from "xlsx";
 import client from "../api/client";
@@ -23,6 +23,9 @@ export default function Grades() {
   const [examId, setExamId] = useState("");
   const [scores, setScores] = useState({});
   const [maxScore, setMaxScore] = useState("100");
+  // Score-entry inputs, keyed by student id, so pressing Enter can jump to the next student's
+  // input instead of submitting/doing nothing.
+  const scoreInputRefs = useRef({});
   const [saved, setSaved] = useState(false);
 
   const [reportStudentId, setReportStudentId] = useState("");
@@ -908,7 +911,7 @@ export default function Grades() {
                         </tr>
                       </thead>
                       <tbody>
-                        {(markMode === "add" ? studentsMissingMarks : students).map((s) => {
+                        {(markMode === "add" ? studentsMissingMarks : students).map((s, rowIndex, rows) => {
                           const raw = scores[s.id];
                           const pct = raw !== undefined && raw !== "" && Number(maxScore) > 0
                             ? ((Number(raw) / Number(maxScore)) * 100).toFixed(1)
@@ -919,12 +922,19 @@ export default function Grades() {
                               <td className="py-2 px-4">{s.firstName} {s.lastName}</td>
                               <td className="py-2 px-4">
                                 <input
+                                  ref={(el) => { scoreInputRefs.current[s.id] = el; }}
                                   className="input"
                                   type="number"
                                   min={0}
                                   max={Number(maxScore) || 100}
                                   value={raw ?? ""}
                                   onChange={(e) => setScores({ ...scores, [s.id]: e.target.value })}
+                                  onKeyDown={(e) => {
+                                    if (e.key !== "Enter") return;
+                                    e.preventDefault();
+                                    const nextStudent = rows[rowIndex + 1];
+                                    if (nextStudent) scoreInputRefs.current[nextStudent.id]?.focus();
+                                  }}
                                 />
                               </td>
                               <td className="py-2 px-4 text-slate/50 font-mono text-xs">{pct != null ? `${pct}%` : "—"}</td>
@@ -1039,6 +1049,7 @@ export default function Grades() {
                   <th className="py-2">%</th>
                   <th className="py-2">Grade</th>
                   <th className="py-2">Teacher</th>
+                  <th className="py-2">Comment</th>
                 </tr>
               </thead>
               <tbody>
@@ -1049,6 +1060,7 @@ export default function Grades() {
                     <td className="py-2">{subj.percentage}%</td>
                     <td className="py-2 font-medium">{subj.grade}</td>
                     <td className="py-2 text-slate/60">{subj.teacher || "—"}</td>
+                    <td className="py-2 text-slate/60 italic">{subj.comment || "—"}</td>
                   </tr>
                 ))}
               </tbody>
