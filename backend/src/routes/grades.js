@@ -1097,22 +1097,88 @@ router.get("/exam-analysis/:classRoomId/:examId/merit-list/pdf", requireRole("AD
     doc.text(data.classMeanPoints != null ? String(data.classMeanPoints) : "—", rightX.mpts, y + 5, { width: rightColW.mpts - 2 });
     y += avgRowHeight + 16;
 
-    // Overall grade distribution, in the same document.
-    if (y > doc.page.height - 60) {
-      doc.addPage();
-      y = margin;
-    }
-    doc.font("Helvetica-Bold").fontSize(9).fillColor(PDF_INK).text("Overall grade distribution", margin, y);
-    y += 14;
-    const distLine = Object.entries(data.classDistribution)
-      .filter(([, count]) => count > 0)
-      .map(([g, count]) => `${g}: ${count}`)
-      .join("   ");
-    doc.font("Helvetica").fontSize(8).fillColor(PDF_SLATE).text(distLine || "No grades recorded", margin, y, { width: pageWidth });
+    // Page 2, same document: overall grade distribution and subject mean/rank, both as
+    // bordered tables, per Moses's request.
+    doc.addPage();
+    y = margin;
+    doc.font("Helvetica-Bold").fontSize(13).fillColor(PDF_INK).text(`${data.classRoom.name} — Grade Distribution & Subject Ranking`, margin, y);
+    y += 24;
+
+    y = drawDistributionTable(doc, { x: margin, y, width: pageWidth, distribution: data.classDistribution });
+    y += 24;
+    y = drawSubjectRankTable(doc, { x: margin, y, width: pageWidth, subjects: data.subjects });
   }
 
   doc.end();
 });
+
+// Bordered "Overall Grade Distribution" table: one header row of grade letters, one row of
+// counts. Zero-count grades are still shown (0) so the band set is visibly complete.
+function drawDistributionTable(doc, { x, y, width, distribution }) {
+  const entries = Object.entries(distribution);
+  const colW = width / entries.length;
+  const headerH = 18;
+  const rowH = 18;
+
+  doc.font("Helvetica-Bold").fontSize(9).fillColor(PDF_INK).text("Overall Grade Distribution", x, y);
+  y += 16;
+
+  doc.rect(x, y, width, headerH).fill(PDF_INK);
+  doc.fillColor("#FFFFFF").fontSize(8).font("Helvetica-Bold");
+  entries.forEach(([grade], i) => {
+    doc.text(grade, x + i * colW, y + 5, { width: colW, align: "center" });
+  });
+  y += headerH;
+
+  doc.rect(x, y, width, rowH).strokeColor(PDF_LINE).lineWidth(0.5).stroke();
+  entries.forEach(([, count], i) => {
+    if (i > 0) doc.moveTo(x + i * colW, y).lineTo(x + i * colW, y + rowH).strokeColor(PDF_LINE).lineWidth(0.5).stroke();
+  });
+  doc.fillColor(PDF_SLATE).fontSize(8).font("Helvetica");
+  entries.forEach(([, count], i) => {
+    doc.text(String(count), x + i * colW, y + 5, { width: colW, align: "center" });
+  });
+  return y + rowH;
+}
+
+// Bordered "Subject Mean & Rank" table, one row per subject, already sorted by rank
+// (buildExamAnalysis sorts subjectStats by mean desc and assigns s.rank).
+function drawSubjectRankTable(doc, { x, y, width, subjects }) {
+  const colW = { rank: 40, subject: width - 40 - 80 - 70, code: 80, mean: 70 };
+  const colX = { rank: x, subject: x + colW.rank, code: x + colW.rank + colW.subject, mean: x + colW.rank + colW.subject + colW.code };
+  const headerH = 18;
+  const rowH = 16;
+
+  doc.font("Helvetica-Bold").fontSize(9).fillColor(PDF_INK).text("Subject Mean & Rank", x, y);
+  y += 16;
+
+  doc.rect(x, y, width, headerH).fill(PDF_INK);
+  doc.fillColor("#FFFFFF").fontSize(8).font("Helvetica-Bold");
+  doc.text("RANK", colX.rank + 4, y + 5, { width: colW.rank - 4 });
+  doc.text("SUBJECT", colX.subject + 4, y + 5, { width: colW.subject - 4 });
+  doc.text("CODE", colX.code + 4, y + 5, { width: colW.code - 4 });
+  doc.text("MEAN %", colX.mean + 4, y + 5, { width: colW.mean - 4 });
+  y += headerH;
+
+  subjects.forEach((s) => {
+    if (y > doc.page.height - 50) {
+      doc.addPage();
+      y = doc.page.margins.top;
+    }
+    doc.rect(x, y, width, rowH).strokeColor(PDF_LINE).lineWidth(0.5).stroke();
+    [colX.subject, colX.code, colX.mean].forEach((lineX) => {
+      doc.moveTo(lineX, y).lineTo(lineX, y + rowH).strokeColor(PDF_LINE).lineWidth(0.5).stroke();
+    });
+    doc.fillColor(PDF_SLATE).fontSize(8).font("Helvetica");
+    doc.text(String(s.rank), colX.rank + 4, y + 4, { width: colW.rank - 4 });
+    doc.text(s.subject, colX.subject + 4, y + 4, { width: colW.subject - 4 });
+    doc.text(s.code || "—", colX.code + 4, y + 4, { width: colW.code - 4 });
+    doc.text(`${s.mean}%`, colX.mean + 4, y + 4, { width: colW.mean - 4 });
+    y += rowH;
+  });
+
+  return y;
+}
 
 // Downloadable subject analysis report PDF — every subject's mean, rank, and grade distribution.
 router.get("/exam-analysis/:classRoomId/:examId/subjects-report/pdf", requireRole("ADMIN", "TEACHER"), async (req, res) => {
