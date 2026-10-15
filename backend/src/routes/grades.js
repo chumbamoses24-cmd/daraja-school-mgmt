@@ -10,6 +10,7 @@ const {
   headTeacherComment,
   levelForPoints,
   subjectComment,
+  LEVEL_ORDER,
 } = require("../lib/grading");
 const { sortByAdmissionNo } = require("../lib/sort");
 const { sortBySubjectOrder } = require("../lib/subjectOrder");
@@ -893,6 +894,20 @@ async function buildExamAnalysis(classRoomId, examId) {
     if (genderKey) classDistributionByGender[genderKey][grade] = (classDistributionByGender[genderKey][grade] || 0) + 1;
   });
 
+  // Overall grade distribution for printouts — per Moses's request this is based on each
+  // student's overall CBC level (EE1..BE2, from totalPoints via levelForPoints), not on
+  // individual subject grades. One row per stream: class name, enrollment (headcount in that
+  // stream), and a count of students at each level. Blank level ("" — not sat/no points) is
+  // just not counted, so a stream's level counts can sum to less than its enrollment.
+  const streamLevelDistribution = siblingClassRooms.map((c) => {
+    const streamStudents = studentRows.filter((s) => s.streamName === c.name);
+    const levels = Object.fromEntries(LEVEL_ORDER.map((l) => [l, 0]));
+    streamStudents.forEach((s) => {
+      if (s.level && levels[s.level] != null) levels[s.level] += 1;
+    });
+    return { className: c.name, enrollment: streamStudents.length, levels };
+  });
+
   const gradedStudents = studentRows.filter((s) => s.meanScore != null);
   const classMeanScore = gradedStudents.length
     ? Math.round(gradedStudents.reduce((s, st) => s + st.meanScore, 0) / gradedStudents.length)
@@ -938,8 +953,10 @@ async function buildExamAnalysis(classRoomId, examId) {
     classMeanPoints,
     classDistribution,
     classDistributionByGender,
+    streamLevelDistribution,
     genderComparison,
     subjects: subjectStats,
+    gradeOrder: bands.map((b) => b.grade),
     students: ranked,
   };
 }
@@ -1104,76 +1121,149 @@ router.get("/exam-analysis/:classRoomId/:examId/merit-list/pdf", requireRole("AD
     doc.font("Helvetica-Bold").fontSize(13).fillColor(PDF_INK).text(`${data.classRoom.name} — Grade Distribution & Subject Ranking`, margin, y);
     y += 24;
 
-    y = drawDistributionTable(doc, { x: margin, y, width: pageWidth, distribution: data.classDistribution });
+    y = drawOverallDistributionTable(doc, { x: margin, y, width: pageWidth, streamLevelDistribution: data.streamLevelDistribution });
     y += 24;
-    y = drawSubjectRankTable(doc, { x: margin, y, width: pageWidth, subjects: data.subjects });
+    y = drawSubjectRankTable(doc, { x: margin, y, width: pageWidth, subjects: data.subjects, gradeOrder: data.gradeOrder });
   }
 
   doc.end();
 });
 
-// Bordered "Overall Grade Distribution" table: one header row of grade letters, one row of
-// counts. Zero-count grades are still shown (0) so the band set is visibly complete.
-function drawDistributionTable(doc, { x, y, width, distribution }) {
-  const entries = Object.entries(distribution);
-  const colW = width / entries.length;
+// Bordered "Overall Grade Distribution" table — one row per stream, built from each student's
+// overall CBC level (EE1..BE2, derived from totalPoints), not from individual subject grades.
+// Column 1 = class/stream name, column 2 = enrollment (headcount in that stream), remaining
+// columns = count of students at each level.
+function drawOverallDistributionTable(doc, { x, y, width, streamLevelDistribution }) {
+  const classW = 110;
+  const enrollW = 60;
+  const levelW = (width - classW - enrollW) / LEVEL_ORDER.length;
   const headerH = 18;
   const rowH = 18;
 
   doc.font("Helvetica-Bold").fontSize(9).fillColor(PDF_INK).text("Overall Grade Distribution", x, y);
   y += 16;
 
+  const colX = (i) => x + classW + enrollW + i * levelW;
+
   doc.rect(x, y, width, headerH).fill(PDF_INK);
   doc.fillColor("#FFFFFF").fontSize(8).font("Helvetica-Bold");
-  entries.forEach(([grade], i) => {
-    doc.text(grade, x + i * colW, y + 5, { width: colW, align: "center" });
+  doc.text("CLASS", x + 4, y + 5, { width: classW - 4 });
+  doc.text("ENROLLMENT", x + classW, y + 5, { width: enrollW, align: "center" });
+  LEVEL_ORDER.forEach((level, i) => {
+    doc.text(level, colX(i), y + 5, { width: levelW, align: "center" });
   });
   y += headerH;
 
-  doc.rect(x, y, width, rowH).strokeColor(PDF_LINE).lineWidth(0.5).stroke();
-  entries.forEach(([, count], i) => {
-    if (i > 0) doc.moveTo(x + i * colW, y).lineTo(x + i * colW, y + rowH).strokeColor(PDF_LINE).lineWidth(0.5).stroke();
+  streamLevelDistribution.forEach((row) => {
+    doc.rect(x, y, width, rowH).strokeColor(PDF_LINE).lineWidth(0.5).stroke();
+    [x + classW, x + classW + enrollW, ...LEVEL_ORDER.slice(0, -1).map((_, i) => colX(i + 1))].forEach((lineX) => {
+      doc.moveTo(lineX, y).lineTo(lineX, y + rowH).strokeColor(PDF_LINE).lineWidth(0.5).stroke();
+    });
+    doc.fillColor(PDF_SLATE).fontSize(8).font("Helvetica-Bold");
+    doc.text(row.className, x + 4, y + 5, { width: classW - 4 });
+    doc.font("Helvetica");
+    doc.text(String(row.enrollment), x + classW, y + 5, { width: enrollW, align: "center" });
+    LEVEL_ORDER.forEach((level, i) => {
+      doc.text(String(row.levels[level] || 0), colX(i), y + 5, { width: levelW, align: "center" });
+    });
+    y += rowH;
   });
-  doc.fillColor(PDF_SLATE).fontSize(8).font("Helvetica");
-  entries.forEach(([, count], i) => {
-    doc.text(String(count), x + i * colW, y + 5, { width: colW, align: "center" });
-  });
-  return y + rowH;
+
+  return y;
 }
 
 // Bordered "Subject Mean & Rank" table, one row per subject, already sorted by rank
-// (buildExamAnalysis sorts subjectStats by mean desc and assigns s.rank).
-function drawSubjectRankTable(doc, { x, y, width, subjects }) {
-  const colW = { rank: 40, subject: width - 40 - 80 - 70, code: 80, mean: 70 };
-  const colX = { rank: x, subject: x + colW.rank, code: x + colW.rank + colW.subject, mean: x + colW.rank + colW.subject + colW.code };
+// (buildExamAnalysis sorts subjectStats by mean desc and assigns s.rank). Also carries that
+// subject's own grade distribution (count of students at each letter grade) as trailing columns.
+function drawSubjectRankTable(doc, { x, y, width, subjects, gradeOrder }) {
+  const fixedW = { rank: 32, subject: 130, code: 50, mean: 45 };
+  const gradesW = width - fixedW.rank - fixedW.subject - fixedW.code - fixedW.mean;
+  const gradeColW = gradeOrder.length ? gradesW / gradeOrder.length : 0;
+  const colX = {
+    rank: x,
+    subject: x + fixedW.rank,
+    code: x + fixedW.rank + fixedW.subject,
+    mean: x + fixedW.rank + fixedW.subject + fixedW.code,
+    gradesStart: x + fixedW.rank + fixedW.subject + fixedW.code + fixedW.mean,
+  };
   const headerH = 18;
   const rowH = 16;
 
   doc.font("Helvetica-Bold").fontSize(9).fillColor(PDF_INK).text("Subject Mean & Rank", x, y);
   y += 16;
 
-  doc.rect(x, y, width, headerH).fill(PDF_INK);
-  doc.fillColor("#FFFFFF").fontSize(8).font("Helvetica-Bold");
-  doc.text("RANK", colX.rank + 4, y + 5, { width: colW.rank - 4 });
-  doc.text("SUBJECT", colX.subject + 4, y + 5, { width: colW.subject - 4 });
-  doc.text("CODE", colX.code + 4, y + 5, { width: colW.code - 4 });
-  doc.text("MEAN %", colX.mean + 4, y + 5, { width: colW.mean - 4 });
-  y += headerH;
+  const drawHeader = () => {
+    doc.rect(x, y, width, headerH).fill(PDF_INK);
+    doc.fillColor("#FFFFFF").fontSize(7.5).font("Helvetica-Bold");
+    doc.text("RANK", colX.rank + 3, y + 5, { width: fixedW.rank - 3 });
+    doc.text("SUBJECT", colX.subject + 3, y + 5, { width: fixedW.subject - 3 });
+    doc.text("CODE", colX.code + 3, y + 5, { width: fixedW.code - 3 });
+    doc.text("MEAN %", colX.mean + 3, y + 5, { width: fixedW.mean - 3 });
+    gradeOrder.forEach((g, i) => {
+      doc.text(g, colX.gradesStart + i * gradeColW, y + 5, { width: gradeColW, align: "center" });
+    });
+    y += headerH;
+  };
+  drawHeader();
 
   subjects.forEach((s) => {
     if (y > doc.page.height - 50) {
       doc.addPage();
       y = doc.page.margins.top;
+      drawHeader();
     }
     doc.rect(x, y, width, rowH).strokeColor(PDF_LINE).lineWidth(0.5).stroke();
-    [colX.subject, colX.code, colX.mean].forEach((lineX) => {
+    [colX.subject, colX.code, colX.mean, ...gradeOrder.slice(0, -1).map((_, i) => colX.gradesStart + (i + 1) * gradeColW)].forEach((lineX) => {
       doc.moveTo(lineX, y).lineTo(lineX, y + rowH).strokeColor(PDF_LINE).lineWidth(0.5).stroke();
     });
-    doc.fillColor(PDF_SLATE).fontSize(8).font("Helvetica");
-    doc.text(String(s.rank), colX.rank + 4, y + 4, { width: colW.rank - 4 });
-    doc.text(s.subject, colX.subject + 4, y + 4, { width: colW.subject - 4 });
-    doc.text(s.code || "—", colX.code + 4, y + 4, { width: colW.code - 4 });
-    doc.text(`${s.mean}%`, colX.mean + 4, y + 4, { width: colW.mean - 4 });
+    doc.fillColor(PDF_SLATE).fontSize(7.5).font("Helvetica");
+    doc.text(String(s.rank), colX.rank + 3, y + 4, { width: fixedW.rank - 3 });
+    doc.text(s.subject, colX.subject + 3, y + 4, { width: fixedW.subject - 3 });
+    doc.text(s.code || "—", colX.code + 3, y + 4, { width: fixedW.code - 3 });
+    doc.text(`${s.mean}%`, colX.mean + 3, y + 4, { width: fixedW.mean - 3 });
+    gradeOrder.forEach((g, i) => {
+      doc.text(String(s.distribution[g] || 0), colX.gradesStart + i * gradeColW, y + 4, { width: gradeColW, align: "center" });
+    });
+    y += rowH;
+  });
+
+  return y;
+}
+
+// Bordered boys-vs-girls grade distribution table for one subject, used on the subject
+// analysis report. Exactly 4 rows: a header row of grade letters, then Boys, Girls, and a
+// Total row (overall distribution, not just the sum of the two genders, so it still counts
+// any student with no gender on file).
+function drawSubjectGenderDistributionTable(doc, { x, y, width, subject }) {
+  const grades = Object.keys(subject.distribution);
+  const labelW = 50;
+  const colW = grades.length ? (width - labelW) / grades.length : 0;
+  const rowH = 16;
+
+  doc.rect(x, y, width, rowH).fill(PDF_INK);
+  doc.fillColor("#FFFFFF").fontSize(7.5).font("Helvetica-Bold");
+  doc.text("", x + 4, y + 5, { width: labelW - 4 });
+  grades.forEach((g, i) => {
+    doc.text(g, x + labelW + i * colW, y + 5, { width: colW, align: "center" });
+  });
+  y += rowH;
+
+  const rows = [
+    { label: "Boys", data: subject.distributionByGender.Male },
+    { label: "Girls", data: subject.distributionByGender.Female },
+    { label: "Total", data: subject.distribution },
+  ];
+  rows.forEach(({ label, data }) => {
+    doc.rect(x, y, width, rowH).strokeColor(PDF_LINE).lineWidth(0.5).stroke();
+    doc.moveTo(x + labelW, y).lineTo(x + labelW, y + rowH).strokeColor(PDF_LINE).lineWidth(0.5).stroke();
+    grades.forEach((g, i) => {
+      if (i > 0) doc.moveTo(x + labelW + i * colW, y).lineTo(x + labelW + i * colW, y + rowH).strokeColor(PDF_LINE).lineWidth(0.5).stroke();
+    });
+    doc.fillColor(PDF_SLATE).fontSize(7.5).font("Helvetica-Bold").text(label, x + 4, y + 5, { width: labelW - 4 });
+    doc.font("Helvetica");
+    grades.forEach((g, i) => {
+      doc.text(String(data[g] || 0), x + labelW + i * colW, y + 5, { width: colW, align: "center" });
+    });
     y += rowH;
   });
 
@@ -1211,25 +1301,16 @@ router.get("/exam-analysis/:classRoomId/:examId/subjects-report/pdf", requireRol
   y += 30;
 
   data.subjects.forEach((s) => {
-    if (y > doc.page.height - 140) {
+    if (y > doc.page.height - 160) {
       doc.addPage();
       y = margin;
     }
     doc.fillColor(PDF_INK).fontSize(12).font("Helvetica-Bold").text(`#${s.rank}  ${s.subject}`, margin, y);
     doc.fillColor(PDF_SLATE).fontSize(10).font("Helvetica").text(`Mean: ${s.mean}%`, margin + 350, y);
-    y += 18;
+    y += 20;
 
-    const gradeLine = Object.entries(s.distribution)
-      .filter(([, count]) => count > 0)
-      .map(([g, count]) => `${g}: ${count}`)
-      .join("   ");
-    doc.fontSize(9).fillColor(PDF_SLATE).text(gradeLine || "No grades recorded", margin, y, { width: pageWidth });
-    y += 14;
-
-    const boysLine = Object.entries(s.distributionByGender.Male).filter(([, c]) => c > 0).map(([g, c]) => `${g}:${c}`).join(" ");
-    const girlsLine = Object.entries(s.distributionByGender.Female).filter(([, c]) => c > 0).map(([g, c]) => `${g}:${c}`).join(" ");
-    doc.fontSize(8).fillColor("#666666").text(`Boys — ${boysLine || "none"}   |   Girls — ${girlsLine || "none"}`, margin, y);
-    y += 22;
+    y = drawSubjectGenderDistributionTable(doc, { x: margin, y, width: pageWidth, subject: s });
+    y += 16;
 
     doc.moveTo(margin, y).lineTo(margin + pageWidth, y).strokeColor(PDF_LINE).lineWidth(0.5).stroke();
     y += 12;

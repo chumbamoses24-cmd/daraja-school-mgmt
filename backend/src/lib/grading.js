@@ -124,4 +124,5 @@ module.exports = {
   headTeacherComment,
   levelForPoints,
   subjectComment,
+  LEVEL_ORDER: LEVEL_BANDS.map((b) => b.level),
 };
