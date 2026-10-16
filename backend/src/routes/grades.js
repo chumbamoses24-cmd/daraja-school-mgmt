@@ -146,7 +146,7 @@ async function buildReportCard(studentId, examId, requestUser) {
       percentage: s.score != null && s.maxScore ? Math.round((s.score / s.maxScore) * 100) : null,
       grade: s.grade,
       teacher: teacherBySubject[s.subject] || null,
-      comment: subjectComment(s.grade),
+      comment: subjectComment(s.subject, s.score != null && s.maxScore ? Math.round((s.score / s.maxScore) * 100) : null, s.grade),
     })),
     totalScore: row.totalScore,
     totalPoints: row.totalPoints,
