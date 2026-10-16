@@ -64,15 +64,89 @@ export default function Students() {
   const [editingClassId, setEditingClassId] = useState(null);
   const [classError, setClassError] = useState("");
 
+  // "ACTIVE" (default roster) or "GRADUATED" (alumni — kept on file for reference, no longer
+  // in a classroom). Switching this re-fetches students with the matching ?status= filter.
+  const [viewStatus, setViewStatus] = useState("ACTIVE");
+
+  const [showPromote, setShowPromote] = useState(false);
+  const [promoteYear, setPromoteYear] = useState(String(new Date().getFullYear()));
+  const [promoteMoves, setPromoteMoves] = useState({}); // { [fromClassRoomId]: toClassRoomId | "GRADUATE" | "" }
+  const [promoteError, setPromoteError] = useState("");
+  const [promoting, setPromoting] = useState(false);
+
   function load() {
-    client.get("/students").then((r) => setStudents(r.data));
+    client.get("/students", { params: { status: viewStatus } }).then((r) => setStudents(r.data));
     client.get("/students/classrooms").then((r) => setClassRooms(r.data));
     client.get("/students/classrooms/levels").then((r) => setLevels(r.data)).catch(() => {});
     if (user.role === "ADMIN") {
       client.get("/auth/users?role=TEACHER").then((r) => setTeachers(r.data)).catch(() => {});
     }
   }
-  useEffect(load, []);
+  useEffect(load, [viewStatus]);
+
+  // Best-guess destination for each class when the promotion panel opens: match on the same
+  // stream one level up (e.g. "Grade 7 East" -> "Grade 8 East" by trailing level number + 1),
+  // or graduate automatically if nothing a level up exists (i.e. this is the top class, Grade 9).
+  function openPromote() {
+    const guesses = {};
+    classRooms.forEach((c) => {
+      const match = c.level.match(/(\d+)/);
+      if (match) {
+        const nextLevel = c.level.replace(match[1], String(Number(match[1]) + 1));
+        const candidates = classRooms.filter((other) => other.level === nextLevel && other.id !== c.id);
+        const target = candidates.find((o) => (o.stream || "") === (c.stream || "")) || (candidates.length === 1 ? candidates[0] : null);
+        guesses[c.id] = target ? String(target.id) : "GRADUATE";
+      } else {
+        guesses[c.id] = "GRADUATE";
+      }
+    });
+    setPromoteMoves(guesses);
+    setPromoteError("");
+    setShowPromote(true);
+  }
+
+  async function handlePromote() {
+    setPromoteError("");
+    const moves = classRooms
+      .filter((c) => (c._count?.students ?? 0) > 0)
+      .map((c) => ({ fromClassRoomId: c.id, toClassRoomId: promoteMoves[c.id] }));
+    if (moves.some((m) => !m.toClassRoomId)) {
+      setPromoteError("Choose a destination (or Graduate) for every class.");
+      return;
+    }
+    if (!promoteYear || !/^\d{4}$/.test(promoteYear)) {
+      setPromoteError("Enter a valid graduation year.");
+      return;
+    }
+    const graduatingCount = moves
+      .filter((m) => m.toClassRoomId === "GRADUATE")
+      .reduce((sum, m) => sum + (classRooms.find((c) => c.id === m.fromClassRoomId)?._count?.students ?? 0), 0);
+    if (
+      !window.confirm(
+        `This will move every active student up a class as set below${
+          graduatingCount ? `, and graduate ${graduatingCount} Grade 9 learner(s) (their records are kept, just marked Graduated)` : ""
+        }. This can't be undone automatically. Continue?`
+      )
+    ) {
+      return;
+    }
+    setPromoting(true);
+    try {
+      await client.post("/students/classrooms/promote", {
+        year: Number(promoteYear),
+        moves: moves.map((m) => ({
+          fromClassRoomId: m.fromClassRoomId,
+          toClassRoomId: m.toClassRoomId === "GRADUATE" ? null : Number(m.toClassRoomId),
+        })),
+      });
+      setShowPromote(false);
+      load();
+    } catch (err) {
+      setPromoteError(err.response?.data?.error || "Could not run promotion.");
+    } finally {
+      setPromoting(false);
+    }
+  }
 
   // Keep the display name in sync with level + stream as the admin types, unless they're editing an
   // existing class whose name doesn't follow that pattern (then leave it alone).
@@ -214,21 +288,80 @@ export default function Students() {
         <div className="mb-8">
           <div className="flex items-center justify-between mb-4">
             <h3 className="font-display text-lg font-semibold">Classes</h3>
-            <button
-              className="btn-secondary text-sm"
-              onClick={() => {
-                if (showClassForm) {
-                  setShowClassForm(false);
-                  setEditingClassId(null);
-                  setClassForm(emptyClassForm);
-                } else {
-                  setShowClassForm(true);
-                }
-              }}
-            >
-              {showClassForm ? "Cancel" : "+ New class"}
-            </button>
+            <div className="flex gap-2">
+              <button className="btn-secondary text-sm" onClick={showPromote ? () => setShowPromote(false) : openPromote}>
+                {showPromote ? "Cancel promotion" : "Promote students"}
+              </button>
+              <button
+                className="btn-secondary text-sm"
+                onClick={() => {
+                  if (showClassForm) {
+                    setShowClassForm(false);
+                    setEditingClassId(null);
+                    setClassForm(emptyClassForm);
+                  } else {
+                    setShowClassForm(true);
+                  }
+                }}
+              >
+                {showClassForm ? "Cancel" : "+ New class"}
+              </button>
+            </div>
           </div>
+
+          {showPromote && (
+            <div className="card p-6 mb-4 space-y-4">
+              <div>
+                <p className="font-medium mb-1">End-of-year promotion</p>
+                <p className="text-xs text-slate/50">
+                  Move every active student up a class. Grade 9 classes graduate instead — their records (grades, attendance,
+                  fees) stay on file, they're just marked Graduated and cleared off the active roster.
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <label className="text-sm font-medium">Graduation year</label>
+                <input
+                  className="input w-28"
+                  value={promoteYear}
+                  onChange={(e) => setPromoteYear(e.target.value)}
+                  placeholder={String(new Date().getFullYear())}
+                />
+              </div>
+              <div className="space-y-2">
+                {classRooms
+                  .filter((c) => (c._count?.students ?? 0) > 0)
+                  .map((c) => (
+                    <div key={c.id} className="flex items-center gap-3 text-sm">
+                      <span className="w-40 font-medium">{c.name}</span>
+                      <span className="text-slate/40 text-xs w-24">{c._count.students} students</span>
+                      <span className="text-slate/40">→</span>
+                      <select
+                        className="input flex-1"
+                        value={promoteMoves[c.id] || ""}
+                        onChange={(e) => setPromoteMoves({ ...promoteMoves, [c.id]: e.target.value })}
+                      >
+                        <option value="">— choose destination —</option>
+                        <option value="GRADUATE">Graduate (leaves Junior School)</option>
+                        {classRooms
+                          .filter((o) => o.id !== c.id)
+                          .map((o) => (
+                            <option key={o.id} value={o.id}>
+                              {o.name}
+                            </option>
+                          ))}
+                      </select>
+                    </div>
+                  ))}
+                {classRooms.filter((c) => (c._count?.students ?? 0) > 0).length === 0 && (
+                  <p className="text-slate/50 text-sm">No classes with active students to promote.</p>
+                )}
+              </div>
+              {promoteError && <p className="text-rust text-sm">{promoteError}</p>}
+              <button className="btn-primary" disabled={promoting} onClick={handlePromote}>
+                {promoting ? "Promoting…" : "Run promotion"}
+              </button>
+            </div>
+          )}
 
           {showClassForm && (
             <form onSubmit={handleAddClass} className="card p-6 mb-4 grid grid-cols-2 gap-4">
@@ -315,11 +448,29 @@ export default function Students() {
 
       <div className="flex items-center justify-between mb-6">
         <h2 className="text-2xl font-display font-semibold">{user.role === "PARENT" ? "My Children" : "Students & Admissions"}</h2>
-        {user.role === "ADMIN" && (
-          <button className="btn-primary" onClick={() => setShowForm((v) => !v)}>
-            {showForm ? "Cancel" : "+ New admission"}
-          </button>
-        )}
+        <div className="flex items-center gap-3">
+          {user.role !== "PARENT" && (
+            <div className="flex gap-2">
+              <button
+                className={`pill border cursor-pointer ${viewStatus === "ACTIVE" ? "border-ink bg-ink text-paper" : "border-line bg-white text-slate/70"}`}
+                onClick={() => setViewStatus("ACTIVE")}
+              >
+                Active
+              </button>
+              <button
+                className={`pill border cursor-pointer ${viewStatus === "GRADUATED" ? "border-ink bg-ink text-paper" : "border-line bg-white text-slate/70"}`}
+                onClick={() => setViewStatus("GRADUATED")}
+              >
+                Graduated
+              </button>
+            </div>
+          )}
+          {user.role === "ADMIN" && viewStatus === "ACTIVE" && (
+            <button className="btn-primary" onClick={() => setShowForm((v) => !v)}>
+              {showForm ? "Cancel" : "+ New admission"}
+            </button>
+          )}
+        </div>
       </div>
 
       {showForm && (
@@ -402,14 +553,19 @@ export default function Students() {
       {(() => {
         const groups = {};
         students.forEach((s) => {
-          const key = s.classRoom?.name || "Unassigned";
+          const key =
+            viewStatus === "GRADUATED"
+              ? s.graduatedYear
+                ? `Graduated ${s.graduatedYear}`
+                : "Graduated (year not recorded)"
+              : s.classRoom?.name || "Unassigned";
           if (!groups[key]) groups[key] = { classRoomId: s.classRoom?.id || null, students: [] };
           groups[key].students.push(s);
         });
         const groupNames = Object.keys(groups).sort((a, b) => {
           if (a === "Unassigned") return 1;
           if (b === "Unassigned") return -1;
-          return a.localeCompare(b);
+          return viewStatus === "GRADUATED" ? b.localeCompare(a) : a.localeCompare(b);
         });
         groupNames.forEach((name) => {
           groups[name].students.sort((a, b) =>

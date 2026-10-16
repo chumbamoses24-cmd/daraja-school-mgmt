@@ -33,6 +33,36 @@ export default function Grades() {
   const [reportCard, setReportCard] = useState(null);
   const [printMode, setPrintMode] = useState("individual"); // "individual" | "class"
 
+  // Term dates (closing date / next term begins) — printed on every report form. Editable right
+  // here next to the preview, rather than buried in general Settings, since this is the only
+  // place they're actually used.
+  const [closingDate, setClosingDate] = useState("");
+  const [nextTermBegins, setNextTermBegins] = useState("");
+  const [termDatesSaved, setTermDatesSaved] = useState(false);
+  const [termDatesSaving, setTermDatesSaving] = useState(false);
+  const [termDatesError, setTermDatesError] = useState("");
+
+  useEffect(() => {
+    client.get("/settings").then((r) => {
+      setClosingDate(r.data.closingDate || "");
+      setNextTermBegins(r.data.nextTermBegins || "");
+    });
+  }, []);
+
+  async function saveTermDates() {
+    setTermDatesError("");
+    setTermDatesSaving(true);
+    try {
+      await client.put("/settings", { closingDate, nextTermBegins });
+      setTermDatesSaved(true);
+      setTimeout(() => setTermDatesSaved(false), 2500);
+    } catch (err) {
+      setTermDatesError(err.response?.data?.error || "Could not save term dates.");
+    } finally {
+      setTermDatesSaving(false);
+    }
+  }
+
   const [showExamForm, setShowExamForm] = useState(false);
   const [examForm, setExamForm] = useState({ name: "", term: "1", year: String(new Date().getFullYear()), classRoomIds: [] });
   const [examError, setExamError] = useState("");
@@ -957,6 +987,34 @@ export default function Grades() {
 
       <div>
         <h2 className="text-2xl font-display font-semibold mb-6">Report card</h2>
+
+        {isAdmin ? (
+          <div className="card p-4 mb-4 flex items-end gap-4 flex-wrap">
+            <div>
+              <label className="block text-xs font-medium mb-1">Closing date</label>
+              <input className="input" maxLength={50} placeholder="e.g. 12th Dec 2026" value={closingDate} onChange={(e) => setClosingDate(e.target.value)} />
+            </div>
+            <div>
+              <label className="block text-xs font-medium mb-1">Next term begins</label>
+              <input className="input" maxLength={50} placeholder="e.g. 5th Jan 2027" value={nextTermBegins} onChange={(e) => setNextTermBegins(e.target.value)} />
+            </div>
+            <button className="btn-secondary text-sm" disabled={termDatesSaving} onClick={saveTermDates}>
+              {termDatesSaving ? "Saving…" : "Save term dates"}
+            </button>
+            {termDatesSaved && <span className="text-moss text-sm">Saved.</span>}
+            {termDatesError && <span className="text-rust text-sm">{termDatesError}</span>}
+            <p className="text-xs text-slate/40 w-full">Printed on every report form below — update these each term.</p>
+          </div>
+        ) : (
+          (closingDate || nextTermBegins) && (
+            <p className="text-xs text-slate/50 mb-4">
+              {closingDate && `Closing: ${closingDate}`}
+              {closingDate && nextTermBegins && " · "}
+              {nextTermBegins && `Next term: ${nextTermBegins}`}
+            </p>
+          )
+        )}
+
         <div className="flex gap-2 mb-4">
           <button
             className={`pill border cursor-pointer ${printMode === "individual" ? "border-ink bg-ink text-paper" : "border-line bg-white text-slate/70"}`}

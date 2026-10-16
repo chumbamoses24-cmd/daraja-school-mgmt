@@ -75,6 +75,12 @@ model Student {
   classRoomId   Int?
   classRoom     ClassRoom?    @relation(fields: [classRoomId], references: [id])
 
+  // "ACTIVE" | "GRADUATED" — set by the end-of-year promotion tool when a Grade 9 learner
+  // completes Junior School. Graduated students keep their record (grades, attendance, fee
+  // history) for future reference; they're just dropped out of classRoomId and active rosters.
+  status        String        @default("ACTIVE")
+  graduatedYear Int?          // the year they graduated, for the alumni record
+
   // Guardian contact info kept directly on the student record — no user account required.
   guardianName  String?
   guardianPhone String?

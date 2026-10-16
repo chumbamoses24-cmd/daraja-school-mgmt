@@ -80,6 +80,52 @@ router.delete("/classrooms/:id", requireRole("ADMIN"), async (req, res) => {
   res.status(204).end();
 });
 
+// End-of-year promotion. For each source class the admin says where its students go next:
+// either another classRoomId (e.g. Grade 7 East -> Grade 8 East) or the literal "GRADUATE"
+// (Grade 9 classes, since Kabiemit's Junior School tops out there). Graduated students keep
+// their record — grades, attendance, fee history all still point at their studentId — they're
+// just marked status: "GRADUATED", stamped with the year, and cleared off classRoomId so they
+// drop out of active rosters, mark entry, etc. Everything runs in one transaction so a class is
+// never left half-promoted.
+router.post("/classrooms/promote", requireRole("ADMIN"), async (req, res) => {
+  const schema = z.object({
+    year: z.number({ required_error: "Graduation year is required" }),
+    moves: z
+      .array(
+        z.object({
+          fromClassRoomId: z.number(),
+          toClassRoomId: z.number().nullable(), // null means "GRADUATE"
+        })
+      )
+      .min(1),
+  });
+  const parsed = schema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+
+  const fromIds = parsed.data.moves.map((m) => m.fromClassRoomId);
+  const toIds = parsed.data.moves.map((m) => m.toClassRoomId).filter((id) => id != null);
+  const classRooms = await prisma.classRoom.findMany({ where: { id: { in: [...fromIds, ...toIds] } } });
+  const classRoomIds = new Set(classRooms.map((c) => c.id));
+  const missing = [...fromIds, ...toIds].filter((id) => !classRoomIds.has(id));
+  if (missing.length) return res.status(400).json({ error: `Unknown class id(s): ${missing.join(", ")}` });
+
+  await prisma.$transaction(
+    parsed.data.moves.map((m) =>
+      m.toClassRoomId == null
+        ? prisma.student.updateMany({
+            where: { classRoomId: m.fromClassRoomId, status: "ACTIVE" },
+            data: { status: "GRADUATED", graduatedYear: parsed.data.year, classRoomId: null },
+          })
+        : prisma.student.updateMany({
+            where: { classRoomId: m.fromClassRoomId, status: "ACTIVE" },
+            data: { classRoomId: m.toClassRoomId },
+          })
+    )
+  );
+
+  res.json({ ok: true });
+});
+
 // Class performance analysis: attendance rate, average grades per subject, and per-student summary.
 router.get("/classrooms/:id/analysis", requireRole("ADMIN", "TEACHER"), async (req, res) => {
   const classRoomId = Number(req.params.id);
@@ -293,12 +339,16 @@ router.get("/classrooms/:id/marksheet/pdf", requireRole("ADMIN", "TEACHER"), asy
 
 // ---- Students / Admissions ----
 router.get("/", async (req, res) => {
-  const { classRoomId, parentId } = req.query;
+  const { classRoomId, parentId, status } = req.query;
   // Parents can only see their own children
   const where = {};
   if (req.user.role === "PARENT") where.parentId = req.user.id;
   if (classRoomId) where.classRoomId = Number(classRoomId);
   if (parentId && req.user.role !== "PARENT") where.parentId = Number(parentId);
+  // Default view is the active roster. Pass ?status=GRADUATED for the alumni list, or
+  // ?status=ALL to see both (e.g. looking up a graduate's old classmates by admission no).
+  if (!status || status === "ACTIVE") where.status = "ACTIVE";
+  else if (status === "GRADUATED") where.status = "GRADUATED";
 
   const students = sortByAdmissionNo(
     await prisma.student.findMany({
