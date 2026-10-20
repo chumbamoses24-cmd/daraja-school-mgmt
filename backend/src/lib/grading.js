@@ -227,23 +227,12 @@ const SUBJECT_COMMENT_BY_GRADE = {
   E: "Weak, needs close attention",
 };
 
-// Strips everything but letters/digits before comparing subject names, so "Pre-Technical
-// Studies", "PRETECHNICAL STUDIES" and "pre technical  studies" all resolve to the same key —
-// admins type subject names freehand (with hyphens, extra spaces, different casing), and a
-// literal mismatch here used to silently fall through to the generic comment bank.
-function normalizeSubjectKey(name) {
-  return String(name || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
-}
-
-const SUBJECT_COMMENTS_BY_NORMALIZED_KEY = Object.fromEntries(
-  Object.entries(SUBJECT_COMMENTS).map(([key, bank]) => [normalizeSubjectKey(key), bank])
-);
-
 // Per-subject, CBC-level-banded comment for the report form's breakdown table. Looks up the
 // subject by name (matching SUBJECT_ORDER) and the student's percentage in that subject; falls
 // back to the generic letter-grade table for subjects with no dedicated comment bank.
 function subjectComment(subjectName, percent, grade) {
-  const bank = SUBJECT_COMMENTS_BY_NORMALIZED_KEY[normalizeSubjectKey(subjectName)];
+  const key = String(subjectName || "").trim().toUpperCase();
+  const bank = SUBJECT_COMMENTS[key];
   if (bank) {
     const level = cbcLevelForPercent(percent);
     if (level && bank[level]) return bank[level];

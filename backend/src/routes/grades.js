@@ -80,6 +80,30 @@ async function buildPreviousComparison(student, currentExam) {
   };
 }
 
+// Fee statement for the report card: this term's outstanding balance, next term's fee, and the
+// two combined. "Next term" rolls over to term 1 of the following year after term 3. Next
+// term's fee is read from an existing Invoice for that term if one's already been raised,
+// otherwise falls back to the class's FeeStructure amount for that term/year. Any figure that
+// can't be determined (no invoice and no fee structure) comes back null, not 0, so the PDF/UI
+// can show "—" instead of a misleading zero.
+async function buildFeeStatement(student, exam) {
+  const invoice = await prisma.invoice.findFirst({ where: { studentId: student.id, term: exam.term, year: exam.year } });
+  const thisTermBalance = invoice ? Math.max(0, invoice.amountDue - invoice.amountPaid) : null;
+
+  const nextTerm = exam.term >= 3 ? 1 : exam.term + 1;
+  const nextYear = exam.term >= 3 ? exam.year + 1 : exam.year;
+
+  const nextInvoice = await prisma.invoice.findFirst({ where: { studentId: student.id, term: nextTerm, year: nextYear } });
+  let nextTermFee = nextInvoice ? nextInvoice.amountDue : null;
+  if (nextTermFee == null && student.classRoomId) {
+    const structure = await prisma.feeStructure.findFirst({ where: { classRoomId: student.classRoomId, term: nextTerm, year: nextYear } });
+    nextTermFee = structure ? structure.amount : null;
+  }
+
+  const total = thisTermBalance != null || nextTermFee != null ? (thisTermBalance || 0) + (nextTermFee || 0) : null;
+  return { thisTermBalance, nextTermFee, total, nextTerm, nextYear };
+}
+
 // Shared builder used by both the JSON report-card route and the PDF route. Built on top of
 // buildExamAnalysis (defined further below) so the report form uses the exact same combined-
 // stream ranking, fixed subject order, and full canonical subject list (blank where ungraded)
@@ -103,10 +127,11 @@ async function buildReportCard(studentId, examId, requestUser) {
   }
   if (!student.classRoomId) throw { status: 400, message: "This student is not assigned to a class" };
 
-  const [analysis, bands, previousComparison] = await Promise.all([
+  const [analysis, bands, previousComparison, feeStatement] = await Promise.all([
     buildExamAnalysis(student.classRoomId, examId),
     getGradingSystem(),
     buildPreviousComparison(student, exam),
+    buildFeeStatement(student, exam),
   ]);
   const row = analysis.students.find((s) => s.id === studentId);
   if (!row) throw { status: 404, message: "No results found for this student in this exam" };
@@ -137,6 +162,10 @@ async function buildReportCard(studentId, examId, requestUser) {
       classRoom: student.classRoom?.name,
       level: student.classRoom?.level,
     },
+    isMultiStream: analysis.classRoom.isMultiStream,
+    streamName: row.streamName,
+    streamPosition: row.streamPosition,
+    streamSize: analysis.streamLevelDistribution.find((s) => s.className === row.streamName)?.enrollment ?? null,
     exam,
     subjects: row.subjects.map((s) => ({
       subject: s.subject,
@@ -158,6 +187,7 @@ async function buildReportCard(studentId, examId, requestUser) {
     previousComparison: previousComparison ? { ...previousComparison, trend } : null,
     classTeacherComment: classTeacherComment(row.totalPoints),
     headTeacherComment: headTeacherComment(row.totalPoints),
+    feeStatement,
   };
 }
 
@@ -559,7 +589,7 @@ function drawReportCardPage(doc, data, branding = { schoolName: "My School", log
 
   // Bottom red rule of the header block
   doc.rect(margin, y, pageWidth, 2.5).fill(REPORT_RED);
-  y += 18;
+  y += 22;
 
   // Info block — a bordered 3x3 table (matches the real form's TableGrid-styled cells): NAME
   // spans the first two columns, then ADM; then two plain 3-up rows.
@@ -593,48 +623,40 @@ function drawReportCardPage(doc, data, branding = { schoolName: "My School", log
   drawInfoCell(margin, infoColW[0], "PREVIOUS EXAM:", prev ? `${prev.examLabel} — ${prev.meanScore ?? "—"}%` : "—");
   drawInfoCell(margin + infoColW[0], infoColW[1], "PREV. POSITION:", prev?.position ? `${prev.position}/${prev.classSize}` : "—");
   drawInfoCell(margin + infoColW[0] + infoColW[1], infoColW[2], "TREND:", prev?.trend || "—");
-  y += infoRowHeight + 10;
+  y += infoRowHeight;
 
-  doc.font("Helvetica-Bold").fontSize(11).text("BREAKDOWN", margin, y);
+  // Stream + within-stream position — only shown when this level actually has more than one
+  // stream (e.g. Grade 8 East/West); data.position above is already the combined ranking.
+  if (data.isMultiStream) {
+    drawInfoCell(margin, infoColW[0], "STREAM:", data.streamName || "—");
+    drawInfoCell(margin + infoColW[0], infoColW[1] + infoColW[2], "STREAM POSITION:", `${data.streamPosition ?? "—"} out of ${data.streamSize ?? "—"}`);
+    y += infoRowHeight;
+  }
   y += 16;
 
-  // Breakdown table — fixed columns, bordered, plain lines (no highlighted banding). SUBJECT,
-  // MARKS, LEVEL and TEACHER are sized just wide enough for their actual content (subject names,
-  // scores, CBC levels, teacher names), freeing most of the row for COMMENT — the auto-generated
-  // per-subject remark (subjectComment() in grading.js) runs 90-115 characters, so it needs real
-  // room to wrap onto two lines. Row height is measured per row (not fixed) so a two-line comment
-  // or an unusually long teacher name never overlaps the row below it.
-  const colW = { subject: 100, marks: 44, level: 40, teacher: 82, comment: 229 };
-  const headerRowHeight = 22;
-  const minRowHeight = 22;
-  const wrappingCols = ["subject", "teacher", "comment"];
-  const rowHeightFor = (cells, fontSize) => {
-    doc.font("Helvetica").fontSize(fontSize);
-    const texts = { subject: cells[0], teacher: cells[3], comment: cells[4] };
-    let h = minRowHeight;
-    wrappingCols.forEach((key) => {
-      const measured = doc.heightOfString(String(texts[key] ?? ""), { width: colW[key] - 8 });
-      h = Math.max(h, measured + 12);
-    });
-    return h;
-  };
+  doc.font("Helvetica-Bold").fontSize(11).text("BREAKDOWN", margin, y);
+  y += 20;
+
+  // Breakdown table — fixed columns, bordered, plain lines (no highlighted banding). COMMENT
+  // is auto-generated per subject (subjectComment() in grading.js), banded on that subject's
+  // own grade, so it fits one line without wrapping.
+  const colW = { subject: 140, marks: 55, level: 50, teacher: 90, comment: 160 };
+  const rowHeight = 22;
   const drawRow = (cells, { header = false } = {}) => {
-    const fontSize = header ? 9.5 : 8.5;
-    const rh = header ? headerRowHeight : rowHeightFor(cells, fontSize);
-    doc.font(header ? "Helvetica-Bold" : "Helvetica").fontSize(fontSize).fillColor(REPORT_SLATE);
+    doc.font(header ? "Helvetica-Bold" : "Helvetica").fontSize(header ? 9.5 : 8.5).fillColor(REPORT_SLATE);
     let x = margin;
     [["subject", cells[0]], ["marks", cells[1]], ["level", cells[2]], ["teacher", cells[3]], ["comment", cells[4]]].forEach(([key, text]) => {
-      doc.rect(x, y, colW[key], rh).strokeColor(REPORT_BORDER).lineWidth(0.75).stroke();
+      doc.rect(x, y, colW[key], rowHeight).strokeColor(REPORT_BORDER).lineWidth(0.75).stroke();
       doc.text(String(text ?? ""), x + 5, y + 6, { width: colW[key] - 8 });
       x += colW[key];
     });
-    y += rh;
+    y += rowHeight;
   };
   drawRow(["SUBJECT", "MARKS", "LEVEL", "TEACHER", "COMMENT"], { header: true });
   data.subjects.forEach((s) => {
     drawRow([s.subject, s.score ?? "", s.grade ?? "", s.teacher ?? "—", s.comment ?? ""]);
   });
-  y += 14;
+  y += 20;
 
   // Closing date / next term — fixed label positions with either the configured date text or
   // a blank dotted line in the gap, since continued text chains don't reserve space for a dash.
@@ -651,31 +673,55 @@ function drawReportCardPage(doc, data, branding = { schoolName: "My School", log
   } else {
     dottedLine(doc, margin + 365, margin + pageWidth, y + 8);
   }
-  y += 24;
+  y += 30;
+
+  // Fee statement — this term's outstanding balance, next term's fee, and the two combined.
+  // Figures that couldn't be determined (no invoice/fee structure on file) show as "—".
+  const fmtKES = (n) => (n == null ? "—" : `KES ${n.toLocaleString()}`);
+  const fee = data.feeStatement || {};
+  const feeColW = pageWidth / 3;
+  doc.font("Helvetica-Bold").fontSize(9.5).fillColor(REPORT_SLATE).text("FEE STATEMENT", margin, y);
+  y += 16;
+  doc.rect(margin, y, pageWidth, 22).strokeColor(REPORT_BORDER).lineWidth(0.75).stroke();
+  doc.moveTo(margin + feeColW, y).lineTo(margin + feeColW, y + 22).strokeColor(REPORT_BORDER).lineWidth(0.75).stroke();
+  doc.moveTo(margin + feeColW * 2, y).lineTo(margin + feeColW * 2, y + 22).strokeColor(REPORT_BORDER).lineWidth(0.75).stroke();
+  const drawFeeCell = (i, label, value) => {
+    doc
+      .font("Helvetica-Bold")
+      .fontSize(8.5)
+      .fillColor(REPORT_SLATE)
+      .text(label, margin + i * feeColW + 6, y + 5, { continued: true })
+      .font("Helvetica")
+      .text(` ${value}`, { width: feeColW - 12 });
+  };
+  drawFeeCell(0, "THIS TERM BALANCE:", fmtKES(fee.thisTermBalance));
+  drawFeeCell(1, `TERM ${fee.nextTerm ?? ""} ${fee.nextYear ?? ""} FEE:`, fmtKES(fee.nextTermFee));
+  drawFeeCell(2, "TOTAL:", fmtKES(fee.total));
+  y += 22 + 20;
 
   // Class teacher's remarks — auto-generated from the student's total points, replacing the
-  // handwritten line on the paper form. Wraps onto the dotted line below if it runs long.
+  // handwritten line on the paper form. Underlined in place of the old dotted rule beneath it.
   doc.font("Helvetica-Bold").fontSize(9.5).fillColor(REPORT_SLATE).text("CLASS TEACHER'S REMARKS:", margin, y);
-  doc.font("Helvetica-Oblique").fontSize(9).text(data.classTeacherComment || "", margin + 175, y, { width: margin + pageWidth - (margin + 175) });
-  y += 20;
-  dottedLine(doc, margin, margin + pageWidth, y + 8);
-  y += 26;
+  doc
+    .font("Helvetica-Oblique")
+    .fontSize(9)
+    .text(data.classTeacherComment || "", margin + 175, y, { width: margin + pageWidth - (margin + 175), underline: true });
+  y += 28;
   doc.font("Helvetica-Bold").text("SIGNATURE", margin + 220, y);
   dottedLine(doc, margin + 300, margin + pageWidth, y + 8);
-  y += 34;
+  y += 40;
 
   // Head teacher's remarks — auto-generated from the student's total points (same bands as the
-  // class teacher's comment, coarser wording), printed just above the head teacher's signature.
+  // class teacher's comment, coarser wording), underlined, printed above the signature line.
   doc.font("Helvetica-Bold").fontSize(9.5).fillColor(REPORT_SLATE).text("HEAD TEACHER'S REMARKS:", margin, y);
-  doc.font("Helvetica-Oblique").fontSize(9).text(data.headTeacherComment || "", margin + 175, y, { width: margin + pageWidth - (margin + 175) });
-  y += 20;
-  dottedLine(doc, margin, margin + pageWidth, y + 8);
-  y += 26;
+  doc
+    .font("Helvetica-Oblique")
+    .fontSize(9)
+    .text(data.headTeacherComment || "", margin + 175, y, { width: margin + pageWidth - (margin + 175), underline: true });
+  y += 28;
 
-  dottedLine(doc, margin, margin + 380, y);
-  y += 10;
   doc.font("Helvetica-Bold").fontSize(10).text(branding.headTeacherName || "", margin, y);
-  y += 14;
+  y += 16;
   doc.text("HEAD TEACHER", margin, y);
   doc.text("SIGNATURE", margin + 220, y);
   dottedLine(doc, margin + 300, margin + pageWidth, y + 9);
@@ -900,6 +946,20 @@ async function buildExamAnalysis(classRoomId, examId) {
   const ranked = [...studentRows].sort((a, b) => (b.meanPoints ?? -1) - (a.meanPoints ?? -1));
   ranked.forEach((s, i) => (s.position = s.meanPoints != null ? i + 1 : null));
 
+  // Position within the student's own stream, separate from the combined cross-stream
+  // `position` above — only meaningful when the level actually has more than one stream;
+  // left null in a single-stream class so callers can tell "not applicable" from "ungraded".
+  if (isMultiStream) {
+    siblingClassRooms.forEach((c) => {
+      const streamRanked = studentRows
+        .filter((s) => s.streamName === c.name)
+        .sort((a, b) => (b.meanPoints ?? -1) - (a.meanPoints ?? -1));
+      streamRanked.forEach((s, i) => (s.streamPosition = s.meanPoints != null ? i + 1 : null));
+    });
+  } else {
+    studentRows.forEach((s) => (s.streamPosition = null));
+  }
+
   // Class-wide grade distribution, overall and by gender
   const classDistribution = gradeCount();
   const classDistributionByGender = { Male: gradeCount(), Female: gradeCount() };
@@ -1049,13 +1109,20 @@ router.get("/exam-analysis/:classRoomId/:examId/merit-list/pdf", requireRole("AD
 
   const contentY = drawPdfHeader(doc, `${data.classRoom.name} — Merit List`, `${data.exam.name} — Term ${data.exam.term}, ${data.exam.year}`, pageWidth, margin, branding);
 
-  // Fixed-width columns on the left (pos/adm/name) and right (mean/pts/m.pts/level/dev); the
-  // subject columns split whatever width is left so the whole table fits on one page.
+  // Fixed-width columns on the left (pos/adm/name[/stream/stream pos]) and right
+  // (mean/pts/m.pts/level/dev); the subject columns split whatever width is left so the whole
+  // table fits on one page. Stream + stream-position columns only appear when this level
+  // actually has more than one stream (e.g. Grade 8 East/West).
+  const isMultiStream = data.classRoom.isMultiStream;
+  const nameW = isMultiStream ? 72 : 88;
   const col = { pos: margin, adm: margin + 20, name: margin + 60 };
+  const streamColW = { stream: 42, streamPos: 30 };
+  const streamX = { stream: margin + 60 + nameW, streamPos: margin + 60 + nameW + streamColW.stream };
+  const leftW = isMultiStream ? 60 + nameW + streamColW.stream + streamColW.streamPos : 60 + nameW;
   const rightColW = { mean: 36, pts: 24, mpts: 32, level: 30, dev: 28 };
   const rightTotalW = Object.values(rightColW).reduce((a, b) => a + b, 0);
-  const subjectsStart = margin + 150;
-  const subjectColWidth = Math.max(26, Math.min(56, (pageWidth - 150 - rightTotalW) / Math.max(data.subjectCount, 1)));
+  const subjectsStart = margin + leftW;
+  const subjectColWidth = Math.max(24, Math.min(56, (pageWidth - leftW - rightTotalW) / Math.max(data.subjectCount, 1)));
   const totalsX = subjectsStart + data.subjectCount * subjectColWidth;
   const rightX = {
     mean: totalsX,
@@ -1072,7 +1139,11 @@ router.get("/exam-analysis/:classRoomId/:examId/merit-list/pdf", requireRole("AD
     doc.fillColor("#FFFFFF").fontSize(6.5).font("Helvetica-Bold");
     doc.text("POS", col.pos + 2, y + 6, { width: 18 });
     doc.text("ADM NO", col.adm, y + 6, { width: 40 });
-    doc.text("NAME", col.name, y + 6, { width: 88 });
+    doc.text("NAME", col.name, y + 6, { width: nameW - 2 });
+    if (isMultiStream) {
+      doc.text("STREAM", streamX.stream, y + 6, { width: streamColW.stream - 2 });
+      doc.text("STR.POS", streamX.streamPos, y + 6, { width: streamColW.streamPos - 2 });
+    }
     // Headers must follow subjectColumns (fixed SUBJECT_ORDER), the same order each row's
     // `subjects` array is built in — not the mean-ranked `data.subjects` (see buildExamAnalysis).
     data.subjectColumns.forEach((s, i) => {
@@ -1102,7 +1173,11 @@ router.get("/exam-analysis/:classRoomId/:examId/merit-list/pdf", requireRole("AD
     drawGridRow(rowHeight);
     doc.text(String(s.position ?? "—"), col.pos + 2, y + 4, { width: 18 });
     doc.text(s.admissionNo, col.adm, y + 4, { width: 40 });
-    doc.text(s.name, col.name, y + 4, { width: 88 });
+    doc.text(s.name, col.name, y + 4, { width: nameW - 2 });
+    if (isMultiStream) {
+      doc.text(s.streamName || "—", streamX.stream, y + 4, { width: streamColW.stream - 2 });
+      doc.text(String(s.streamPosition ?? "—"), streamX.streamPos, y + 4, { width: streamColW.streamPos - 2 });
+    }
     s.subjects.forEach((sub, j) => {
       const text = sub.percentage != null ? `${sub.percentage}(${sub.grade})` : "—";
       doc.text(text, subjectsStart + j * subjectColWidth, y + 4, { width: subjectColWidth - 2 });
@@ -1122,7 +1197,7 @@ router.get("/exam-analysis/:classRoomId/:examId/merit-list/pdf", requireRole("AD
     // Subject-averages row, directly after the last position.
     const avgRowHeight = 16;
     drawGridRow(avgRowHeight, { bold: true });
-    doc.text("AVERAGE", col.name, y + 5, { width: 88 });
+    doc.text("AVERAGE", col.name, y + 5, { width: nameW - 2 });
     data.subjectColumns.forEach((s, j) => {
       const mean = subjectMeanByName[s.name];
       doc.text(mean != null ? `${mean}%` : "—", subjectsStart + j * subjectColWidth, y + 5, { width: subjectColWidth - 2 });
@@ -1138,7 +1213,13 @@ router.get("/exam-analysis/:classRoomId/:examId/merit-list/pdf", requireRole("AD
     doc.font("Helvetica-Bold").fontSize(13).fillColor(PDF_INK).text(`${data.classRoom.name} — Grade Distribution & Subject Ranking`, margin, y);
     y += 24;
 
-    y = drawOverallDistributionTable(doc, { x: margin, y, width: pageWidth, streamLevelDistribution: data.streamLevelDistribution });
+    y = drawOverallDistributionTable(doc, {
+      x: margin,
+      y,
+      width: pageWidth,
+      streamLevelDistribution: data.streamLevelDistribution,
+      combinedLabel: data.classRoom.isMultiStream ? data.classRoom.name : null,
+    });
     y += 24;
     y = drawSubjectRankTable(doc, { x: margin, y, width: pageWidth, subjects: data.subjects, gradeOrder: data.gradeOrder });
   }
@@ -1150,7 +1231,7 @@ router.get("/exam-analysis/:classRoomId/:examId/merit-list/pdf", requireRole("AD
 // overall CBC level (EE1..BE2, derived from totalPoints), not from individual subject grades.
 // Column 1 = class/stream name, column 2 = enrollment (headcount in that stream), remaining
 // columns = count of students at each level.
-function drawOverallDistributionTable(doc, { x, y, width, streamLevelDistribution }) {
+function drawOverallDistributionTable(doc, { x, y, width, streamLevelDistribution, combinedLabel = null }) {
   const classW = 110;
   const enrollW = 60;
   const levelW = (width - classW - enrollW) / LEVEL_ORDER.length;
@@ -1171,14 +1252,28 @@ function drawOverallDistributionTable(doc, { x, y, width, streamLevelDistributio
   });
   y += headerH;
 
-  streamLevelDistribution.forEach((row) => {
+  // When there's more than one stream, append a combined "total" row for the whole level —
+  // e.g. Grade 8 East (36) + Grade 8 West (37) = 73 — summing enrollment and every level count.
+  const rows = [...streamLevelDistribution];
+  if (combinedLabel && streamLevelDistribution.length > 1) {
+    const combinedLevels = Object.fromEntries(LEVEL_ORDER.map((l) => [l, 0]));
+    let combinedEnrollment = 0;
+    streamLevelDistribution.forEach((row) => {
+      combinedEnrollment += row.enrollment;
+      LEVEL_ORDER.forEach((l) => (combinedLevels[l] += row.levels[l] || 0));
+    });
+    rows.push({ className: combinedLabel, enrollment: combinedEnrollment, levels: combinedLevels, isTotal: true });
+  }
+
+  rows.forEach((row) => {
+    if (row.isTotal) doc.rect(x, y, width, rowH).fillOpacity(0.08).fill(PDF_INK).fillOpacity(1);
     doc.rect(x, y, width, rowH).strokeColor(PDF_LINE).lineWidth(0.5).stroke();
     [x + classW, x + classW + enrollW, ...LEVEL_ORDER.slice(0, -1).map((_, i) => colX(i + 1))].forEach((lineX) => {
       doc.moveTo(lineX, y).lineTo(lineX, y + rowH).strokeColor(PDF_LINE).lineWidth(0.5).stroke();
     });
     doc.fillColor(PDF_SLATE).fontSize(8).font("Helvetica-Bold");
-    doc.text(row.className, x + 4, y + 5, { width: classW - 4 });
-    doc.font("Helvetica");
+    doc.text(row.isTotal ? `${row.className} (TOTAL)` : row.className, x + 4, y + 5, { width: classW - 4 });
+    doc.font(row.isTotal ? "Helvetica-Bold" : "Helvetica");
     doc.text(String(row.enrollment), x + classW, y + 5, { width: enrollW, align: "center" });
     LEVEL_ORDER.forEach((level, i) => {
       doc.text(String(row.levels[level] || 0), colX(i), y + 5, { width: levelW, align: "center" });
