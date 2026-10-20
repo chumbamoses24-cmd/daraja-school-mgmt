@@ -639,24 +639,31 @@ function drawReportCardPage(doc, data, branding = { schoolName: "My School", log
 
   // Breakdown table — fixed columns, bordered, plain lines (no highlighted banding). COMMENT
   // is auto-generated per subject (subjectComment() in grading.js), banded on that subject's
-  // own grade, so it fits one line without wrapping.
-  const colW = { subject: 140, marks: 55, level: 50, teacher: 90, comment: 160 };
-  const rowHeight = 22;
+  // own grade. The other columns are kept narrow so the COMMENT column gets about half the
+  // table width — enough for every comment in the bank to fit in two lines at 8pt. Rows grow
+  // to fit their tallest cell (never more than two lines for the comment).
+  const colW = { subject: 98, marks: 40, level: 36, teacher: 76, comment: 245 };
+  const cellPad = 3;
+  const lineH = 9.5;
   const drawRow = (cells, { header = false } = {}) => {
-    doc.font(header ? "Helvetica-Bold" : "Helvetica").fontSize(header ? 9.5 : 8.5).fillColor(REPORT_SLATE);
+    doc.font(header ? "Helvetica-Bold" : "Helvetica").fontSize(header ? 8.5 : 8).fillColor(REPORT_SLATE);
+    const keys = ["subject", "marks", "level", "teacher", "comment"];
+    const texts = keys.map((_, i) => String(cells[i] ?? ""));
+    const textH = Math.max(...keys.map((k, i) => doc.heightOfString(texts[i], { width: colW[k] - cellPad * 2, lineGap: 0 })));
+    const h = Math.max(20, textH + cellPad * 2);
     let x = margin;
-    [["subject", cells[0]], ["marks", cells[1]], ["level", cells[2]], ["teacher", cells[3]], ["comment", cells[4]]].forEach(([key, text]) => {
-      doc.rect(x, y, colW[key], rowHeight).strokeColor(REPORT_BORDER).lineWidth(0.75).stroke();
-      doc.text(String(text ?? ""), x + 5, y + 6, { width: colW[key] - 8 });
+    keys.forEach((key, i) => {
+      doc.rect(x, y, colW[key], h).strokeColor(REPORT_BORDER).lineWidth(0.75).stroke();
+      doc.text(texts[i], x + cellPad, y + cellPad + (h - cellPad * 2 - textH) / 2, { width: colW[key] - cellPad * 2, lineGap: 0 });
       x += colW[key];
     });
-    y += rowHeight;
+    y += h;
   };
   drawRow(["SUBJECT", "MARKS", "LEVEL", "TEACHER", "COMMENT"], { header: true });
   data.subjects.forEach((s) => {
     drawRow([s.subject, s.score ?? "", s.grade ?? "", s.teacher ?? "—", s.comment ?? ""]);
   });
-  y += 20;
+  y += 14;
 
   // Closing date / next term — fixed label positions with either the configured date text or
   // a blank dotted line in the gap, since continued text chains don't reserve space for a dash.
@@ -697,7 +704,7 @@ function drawReportCardPage(doc, data, branding = { schoolName: "My School", log
   drawFeeCell(0, "THIS TERM BALANCE:", fmtKES(fee.thisTermBalance));
   drawFeeCell(1, `TERM ${fee.nextTerm ?? ""} ${fee.nextYear ?? ""} FEE:`, fmtKES(fee.nextTermFee));
   drawFeeCell(2, "TOTAL:", fmtKES(fee.total));
-  y += 22 + 20;
+  y += 22 + 14;
 
   // Class teacher's remarks — auto-generated from the student's total points, replacing the
   // handwritten line on the paper form. Underlined in place of the old dotted rule beneath it.
@@ -709,7 +716,7 @@ function drawReportCardPage(doc, data, branding = { schoolName: "My School", log
   y += 28;
   doc.font("Helvetica-Bold").text("SIGNATURE", margin + 220, y);
   dottedLine(doc, margin + 300, margin + pageWidth, y + 8);
-  y += 40;
+  y += 30;
 
   // Head teacher's remarks — auto-generated from the student's total points (same bands as the
   // class teacher's comment, coarser wording), underlined, printed above the signature line.
