@@ -310,12 +310,6 @@ export default function ClassAnalysis() {
                     <th className="py-2 px-3 border border-line">Pos</th>
                     <th className="py-2 px-3 border border-line">Adm No</th>
                     <th className="py-2 px-3 border border-line">Name</th>
-                    {examAnalysis.classRoom.isMultiStream && (
-                      <>
-                        <th className="py-2 px-3 border border-line">Stream</th>
-                        <th className="py-2 px-3 border border-line">Stream Pos</th>
-                      </>
-                    )}
                     {examAnalysis.subjectColumns.map((s) => (
                       <th key={s.name} className="py-2 px-3 border border-line whitespace-nowrap" title={s.name}>{s.code}</th>
                     ))}
@@ -334,12 +328,6 @@ export default function ClassAnalysis() {
                       <td className="py-2 px-3 border border-line">
                         <Link to={`/students/${s.id}`} className="hover:underline text-ink whitespace-nowrap">{s.name}</Link>
                       </td>
-                      {examAnalysis.classRoom.isMultiStream && (
-                        <>
-                          <td className="py-2 px-3 border border-line whitespace-nowrap">{s.streamName || "—"}</td>
-                          <td className="py-2 px-3 border border-line font-mono">{s.streamPosition ?? "—"}</td>
-                        </>
-                      )}
                       {s.subjects.map((sub) => (
                         <td key={sub.subject} className="py-2 px-3 border border-line whitespace-nowrap">
                           {sub.percentage != null ? `${sub.percentage}% (${sub.grade})` : "—"}
@@ -355,11 +343,11 @@ export default function ClassAnalysis() {
                     </tr>
                   ))}
                   {examAnalysis.students.filter((s) => s.sat).length === 0 && (
-                    <tr><td colSpan={8 + (examAnalysis.classRoom.isMultiStream ? 2 : 0) + examAnalysis.subjectColumns.length} className="py-6 text-center text-slate/50 border border-line">No students have sat this exam yet.</td></tr>
+                    <tr><td colSpan={8 + examAnalysis.subjectColumns.length} className="py-6 text-center text-slate/50 border border-line">No students have sat this exam yet.</td></tr>
                   )}
                   {examAnalysis.students.some((s) => s.sat) && (
                     <tr className="bg-line/10 font-semibold">
-                      <td className="py-2 px-3 border border-line" colSpan={3 + (examAnalysis.classRoom.isMultiStream ? 2 : 0)}>Average</td>
+                      <td className="py-2 px-3 border border-line" colSpan={3}>Average</td>
                       {examAnalysis.subjectColumns.map((col) => {
                         const subj = examAnalysis.subjects.find((s) => s.subject === col.name);
                         return (

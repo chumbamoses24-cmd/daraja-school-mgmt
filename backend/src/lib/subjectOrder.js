@@ -13,8 +13,14 @@ const SUBJECT_ORDER = [
   "PRETECHNICAL STUDIES",
 ];
 
+// Same normalization as grading.js's subjectComment() — strips everything but letters/digits so
+// "Pre-Technical Studies" (admin-typed, with a hyphen) still matches "PRETECHNICAL STUDIES"
+// here instead of silently falling to alphabetical-last.
+const normalize = (name) => String(name || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+const NORMALIZED_ORDER = SUBJECT_ORDER.map(normalize);
+
 function subjectRank(name) {
-  const idx = SUBJECT_ORDER.indexOf(String(name || "").trim().toUpperCase());
+  const idx = NORMALIZED_ORDER.indexOf(normalize(name));
   return idx === -1 ? SUBJECT_ORDER.length : idx;
 }
 

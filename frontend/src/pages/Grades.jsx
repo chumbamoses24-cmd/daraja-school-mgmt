@@ -1069,11 +1069,6 @@ export default function Grades() {
               <div>
                 <h3 className="font-display text-xl font-semibold">{reportCard.student.name}</h3>
                 <p className="text-slate/60 text-sm">{reportCard.student.classRoom} · {reportCard.exam.name}, Term {reportCard.exam.term} {reportCard.exam.year}</p>
-                {reportCard.isMultiStream && (
-                  <p className="text-slate/50 text-xs mt-1">
-                    Stream: {reportCard.streamName || "—"} · Stream position: {reportCard.streamPosition ?? "—"}
-                  </p>
-                )}
               </div>
               <div className="text-right">
                 <p className="text-xs uppercase tracking-wider text-slate/50 font-mono">Overall</p>
@@ -1138,30 +1133,6 @@ export default function Grades() {
               <div className="mt-2 text-sm">
                 <span className="text-slate/50 uppercase text-xs tracking-wider">Head Teacher's Remarks: </span>
                 <span className="italic text-slate/80">{reportCard.headTeacherComment}</span>
-              </div>
-            )}
-            {reportCard.feeStatement && (
-              <div className="mt-4 pt-4 border-t border-line grid grid-cols-3 gap-4 text-sm">
-                <div>
-                  <p className="text-xs uppercase tracking-wider text-slate/50 font-mono mb-1">This term balance</p>
-                  <p className="font-semibold">
-                    {reportCard.feeStatement.thisTermBalance != null ? `KES ${reportCard.feeStatement.thisTermBalance.toLocaleString()}` : "—"}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-xs uppercase tracking-wider text-slate/50 font-mono mb-1">
-                    Term {reportCard.feeStatement.nextTerm} {reportCard.feeStatement.nextYear} fee
-                  </p>
-                  <p className="font-semibold">
-                    {reportCard.feeStatement.nextTermFee != null ? `KES ${reportCard.feeStatement.nextTermFee.toLocaleString()}` : "—"}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-xs uppercase tracking-wider text-slate/50 font-mono mb-1">Total</p>
-                  <p className="font-semibold">
-                    {reportCard.feeStatement.total != null ? `KES ${reportCard.feeStatement.total.toLocaleString()}` : "—"}
-                  </p>
-                </div>
               </div>
             )}
           </div>
