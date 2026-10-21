@@ -131,7 +131,8 @@ async function buildReportCard(studentId, examId, requestUser) {
     buildExamAnalysis(student.classRoomId, examId),
     getGradingSystem(),
     buildPreviousComparison(student, exam),
-    buildFeeStatement(student, exam),
+    // Fee figures are admin-only — teachers and parents never get them on a report card.
+    requestUser.role === "ADMIN" ? buildFeeStatement(student, exam) : Promise.resolve(null),
   ]);
   const row = analysis.students.find((s) => s.id === studentId);
   if (!row) throw { status: 404, message: "No results found for this student in this exam" };
@@ -644,17 +645,34 @@ function drawReportCardPage(doc, data, branding = { schoolName: "My School", log
   // to fit their tallest cell (never more than two lines for the comment).
   const colW = { subject: 98, marks: 40, level: 36, teacher: 76, comment: 245 };
   const cellPad = 3;
-  const lineH = 9.5;
+  const keys = ["subject", "marks", "level", "teacher", "comment"];
   const drawRow = (cells, { header = false } = {}) => {
-    doc.font(header ? "Helvetica-Bold" : "Helvetica").fontSize(header ? 8.5 : 8).fillColor(REPORT_SLATE);
-    const keys = ["subject", "marks", "level", "teacher", "comment"];
+    const baseSize = header ? 8.5 : 8;
+    doc.font(header ? "Helvetica-Bold" : "Helvetica").fillColor(REPORT_SLATE);
     const texts = keys.map((_, i) => String(cells[i] ?? ""));
-    const textH = Math.max(...keys.map((k, i) => doc.heightOfString(texts[i], { width: colW[k] - cellPad * 2, lineGap: 0 })));
-    const h = Math.max(20, textH + cellPad * 2);
+    const innerW = (k) => colW[k] - cellPad * 2;
+    // Each cell gets its own font size: the comment cell is shrunk (down to 6pt) until it fits
+    // in two lines, so a long comment can never spill to a third line or get cut off.
+    const sizes = keys.map((k, i) => {
+      let size = baseSize;
+      if (k !== "comment" || header) return size;
+      while (size > 6) {
+        doc.fontSize(size);
+        if (doc.heightOfString(texts[i], { width: innerW(k), lineGap: 0 }) <= doc.currentLineHeight() * 2 + 0.5) break;
+        size -= 0.5;
+      }
+      return size;
+    });
+    const heights = keys.map((k, i) => {
+      doc.fontSize(sizes[i]);
+      return doc.heightOfString(texts[i], { width: innerW(k), lineGap: 0 });
+    });
+    const h = Math.max(20, Math.max(...heights) + cellPad * 2);
     let x = margin;
     keys.forEach((key, i) => {
       doc.rect(x, y, colW[key], h).strokeColor(REPORT_BORDER).lineWidth(0.75).stroke();
-      doc.text(texts[i], x + cellPad, y + cellPad + (h - cellPad * 2 - textH) / 2, { width: colW[key] - cellPad * 2, lineGap: 0 });
+      doc.fontSize(sizes[i]).fillColor(REPORT_SLATE);
+      doc.text(texts[i], x + cellPad, y + cellPad + (h - cellPad * 2 - heights[i]) / 2, { width: innerW(key), lineGap: 0, lineBreak: true });
       x += colW[key];
     });
     y += h;
@@ -684,27 +702,29 @@ function drawReportCardPage(doc, data, branding = { schoolName: "My School", log
 
   // Fee statement — this term's outstanding balance, next term's fee, and the two combined.
   // Figures that couldn't be determined (no invoice/fee structure on file) show as "—".
-  const fmtKES = (n) => (n == null ? "—" : `KES ${n.toLocaleString()}`);
-  const fee = data.feeStatement || {};
-  const feeColW = pageWidth / 3;
-  doc.font("Helvetica-Bold").fontSize(9.5).fillColor(REPORT_SLATE).text("FEE STATEMENT", margin, y);
-  y += 16;
-  doc.rect(margin, y, pageWidth, 22).strokeColor(REPORT_BORDER).lineWidth(0.75).stroke();
-  doc.moveTo(margin + feeColW, y).lineTo(margin + feeColW, y + 22).strokeColor(REPORT_BORDER).lineWidth(0.75).stroke();
-  doc.moveTo(margin + feeColW * 2, y).lineTo(margin + feeColW * 2, y + 22).strokeColor(REPORT_BORDER).lineWidth(0.75).stroke();
-  const drawFeeCell = (i, label, value) => {
-    doc
-      .font("Helvetica-Bold")
-      .fontSize(8.5)
-      .fillColor(REPORT_SLATE)
-      .text(label, margin + i * feeColW + 6, y + 5, { continued: true })
-      .font("Helvetica")
-      .text(` ${value}`, { width: feeColW - 12 });
-  };
-  drawFeeCell(0, "THIS TERM BALANCE:", fmtKES(fee.thisTermBalance));
-  drawFeeCell(1, `TERM ${fee.nextTerm ?? ""} ${fee.nextYear ?? ""} FEE:`, fmtKES(fee.nextTermFee));
-  drawFeeCell(2, "TOTAL:", fmtKES(fee.total));
-  y += 22 + 14;
+  if (data.feeStatement) {
+    const fmtKES = (n) => (n == null ? "—" : `KES ${n.toLocaleString()}`);
+    const fee = data.feeStatement;
+    const feeColW = pageWidth / 3;
+    doc.font("Helvetica-Bold").fontSize(9.5).fillColor(REPORT_SLATE).text("FEE STATEMENT", margin, y);
+    y += 16;
+    doc.rect(margin, y, pageWidth, 22).strokeColor(REPORT_BORDER).lineWidth(0.75).stroke();
+    doc.moveTo(margin + feeColW, y).lineTo(margin + feeColW, y + 22).strokeColor(REPORT_BORDER).lineWidth(0.75).stroke();
+    doc.moveTo(margin + feeColW * 2, y).lineTo(margin + feeColW * 2, y + 22).strokeColor(REPORT_BORDER).lineWidth(0.75).stroke();
+    const drawFeeCell = (i, label, value) => {
+      doc
+        .font("Helvetica-Bold")
+        .fontSize(8.5)
+        .fillColor(REPORT_SLATE)
+        .text(label, margin + i * feeColW + 6, y + 5, { continued: true })
+        .font("Helvetica")
+        .text(` ${value}`, { width: feeColW - 12 });
+    };
+    drawFeeCell(0, "THIS TERM BALANCE:", fmtKES(fee.thisTermBalance));
+    drawFeeCell(1, `TERM ${fee.nextTerm ?? ""} ${fee.nextYear ?? ""} FEE:`, fmtKES(fee.nextTermFee));
+    drawFeeCell(2, "TOTAL:", fmtKES(fee.total));
+    y += 22 + 14;
+  }
 
   // Class teacher's remarks — auto-generated from the student's total points, replacing the
   // handwritten line on the paper form. Underlined in place of the old dotted rule beneath it.

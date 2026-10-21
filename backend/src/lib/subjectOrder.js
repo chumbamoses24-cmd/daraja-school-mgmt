@@ -13,8 +13,30 @@ const SUBJECT_ORDER = [
   "PRETECHNICAL STUDIES",
 ];
 
+// Subject names are typed in by the admin, so the same subject can be spelled many ways
+// ("Pre-Technical Studies", "PRE TECHNICAL", "Pretech", "Creative Arts and Sports"...). Everything
+// that looks a subject up by name (display order, comment bank) goes through this one function
+// so a spelling difference can never make a subject silently fall out of its slot or comment.
+// Returns the canonical SUBJECT_ORDER name, or null if the subject isn't a recognised one.
+function canonicalSubject(name) {
+  const raw = String(name || "").toUpperCase().replace(/&/g, " AND ");
+  const compact = raw.replace(/[^A-Z0-9]/g, "");
+  if (!compact) return null;
+  if (/PRE?TECH/.test(compact) || compact === "TECHNICAL" || compact.startsWith("TECHNICAL")) return "PRETECHNICAL STUDIES";
+  if (compact.startsWith("ENG")) return "ENGLISH";
+  if (compact.startsWith("KISW")) return "KISWAHILI";
+  if (compact.startsWith("MATH")) return "MATHEMATICS";
+  if (compact.includes("SCIENCE") || compact === "SCI") return "INTEGRATED SCIENCE";
+  if (compact.startsWith("AGRI")) return "AGRICULTURE";
+  if (compact.startsWith("SOCIAL") || compact === "SST") return "SOCIAL STUDIES";
+  if (compact === "CRE" || compact.startsWith("CHRISTIAN") || compact.includes("RELIGIOUS")) return "CRE";
+  if (compact.startsWith("CREATIVE") || compact.includes("ARTS") || compact === "CAS") return "CREATIVE ARTS & SPORTS";
+  return null;
+}
+
 function subjectRank(name) {
-  const idx = SUBJECT_ORDER.indexOf(String(name || "").trim().toUpperCase());
+  const canon = canonicalSubject(name);
+  const idx = canon ? SUBJECT_ORDER.indexOf(canon) : -1;
   return idx === -1 ? SUBJECT_ORDER.length : idx;
 }
 
@@ -28,4 +50,4 @@ function sortBySubjectOrder(list, nameOf = (x) => x) {
   });
 }
 
-module.exports = { SUBJECT_ORDER, subjectRank, sortBySubjectOrder };
+module.exports = { SUBJECT_ORDER, canonicalSubject, subjectRank, sortBySubjectOrder };

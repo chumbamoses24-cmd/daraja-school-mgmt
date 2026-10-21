@@ -28,7 +28,6 @@ const NAV = {
     { to: "/", label: "Dashboard", tab: "01" },
     { to: "/students", label: "My Children", tab: "02" },
     { to: "/grades", label: "Report Cards", tab: "04" },
-    { to: "/fees", label: "Fee Statement", tab: "05" },
     { to: "/messages", label: "Messages", tab: "07" },
   ],
 };

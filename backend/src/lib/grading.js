@@ -1,4 +1,5 @@
 const prisma = require("./prisma");
+const { canonicalSubject } = require("./subjectOrder");
 
 // Default KCSE-style 12-point grading scale, used only if the school hasn't configured one yet.
 const DEFAULT_BANDS = [
@@ -231,12 +232,12 @@ const SUBJECT_COMMENT_BY_GRADE = {
 // subject by name (matching SUBJECT_ORDER) and the student's percentage in that subject; falls
 // back to the generic letter-grade table for subjects with no dedicated comment bank.
 function subjectComment(subjectName, percent, grade) {
-  const key = String(subjectName || "").trim().toUpperCase();
+  // Match the subject by its canonical name so spelling variants ("Pre-Technical Studies",
+  // "PRE TECHNICAL", "Creative Arts and Sports"...) still find their comment bank.
+  const key = canonicalSubject(subjectName) || String(subjectName || "").trim().toUpperCase();
   const bank = SUBJECT_COMMENTS[key];
-  if (bank) {
-    const level = cbcLevelForPercent(percent);
-    if (level && bank[level]) return bank[level];
-  }
+  const level = cbcLevelForPercent(percent);
+  if (bank && level && bank[level]) return bank[level];
   return SUBJECT_COMMENT_BY_GRADE[grade] || "";
 }
 

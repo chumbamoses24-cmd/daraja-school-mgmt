@@ -27,7 +27,7 @@ export default function Dashboard() {
 
   useEffect(() => {
     client.get("/students").then((r) => setStudents(r.data)).catch(() => {});
-    if (user.role !== "TEACHER") client.get("/fees/invoices").then((r) => setInvoices(r.data)).catch(() => {});
+    if (user.role === "ADMIN") client.get("/fees/invoices").then((r) => setInvoices(r.data)).catch(() => {});
     client.get("/messages/inbox").then((r) => setMessages(r.data)).catch(() => {});
     if (user.role !== "PARENT") client.get("/students/classrooms").then((r) => setClassRooms(r.data)).catch(() => {});
   }, [user.role]);
@@ -46,7 +46,7 @@ export default function Dashboard() {
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
         <StatCard label={user.role === "PARENT" ? "My Children" : "Students"} value={students.length} />
-        {user.role !== "TEACHER" && <StatCard label="Unpaid Invoices" value={unpaidCount} tone={unpaidCount ? "rust" : "moss"} />}
+        {user.role === "ADMIN" && <StatCard label="Unpaid Invoices" value={unpaidCount} tone={unpaidCount ? "rust" : "moss"} />}
         <StatCard label="Unread Messages" value={unreadCount} tone={unreadCount ? "amber" : "moss"} />
         {user.role === "ADMIN" && <StatCard label="Role" value="Admin" />}
       </div>
