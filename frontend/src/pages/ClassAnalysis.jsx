@@ -336,7 +336,7 @@ export default function ClassAnalysis() {
                       </td>
                       {examAnalysis.classRoom.isMultiStream && (
                         <>
-                          <td className="py-2 px-3 border border-line whitespace-nowrap">{s.streamName || "—"}</td>
+                          <td className="py-2 px-3 border border-line whitespace-nowrap">{s.streamLabel || s.streamName || "—"}</td>
                           <td className="py-2 px-3 border border-line font-mono">{s.streamPosition ?? "—"}</td>
                         </>
                       )}

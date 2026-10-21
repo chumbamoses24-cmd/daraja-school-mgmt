@@ -171,6 +171,7 @@ async function buildReportCard(studentId, examId, requestUser) {
     },
     isMultiStream: analysis.classRoom.isMultiStream,
     streamName: row.streamName,
+    streamLabel: row.streamLabel,
     streamPosition: row.streamPosition,
     streamSize: analysis.streamLevelDistribution.find((s) => s.className === row.streamName)?.enrollment ?? null,
     exam,
@@ -636,7 +637,7 @@ function drawReportCardPage(doc, data, branding = { schoolName: "My School", log
   // Stream + within-stream position — only shown when this level actually has more than one
   // stream (e.g. Grade 8 East/West); data.position above is already the combined ranking.
   if (data.isMultiStream) {
-    drawInfoCell(margin, infoColW[0], "STREAM:", data.streamName || "—");
+    drawInfoCell(margin, infoColW[0], "STREAM:", data.streamLabel || data.streamName || "—");
     drawInfoCell(margin + infoColW[0], infoColW[1] + infoColW[2], "STREAM POSITION:", `${data.streamPosition ?? "—"} out of ${data.streamSize ?? "—"}`);
     y += infoRowHeight;
   }
@@ -964,6 +965,7 @@ async function buildExamAnalysis(classRoomId, examId) {
       name: `${s.firstName} ${s.lastName}`,
       gender: s.gender,
       streamName: s.classRoomId ? siblingClassRooms.find((c) => c.id === s.classRoomId)?.name : null,
+      streamLabel: s.classRoomId ? shortStreamLabel(siblingClassRooms.find((c) => c.id === s.classRoomId)) : null,
       subjects,
       totalScore,
       meanScore,
@@ -1209,7 +1211,7 @@ router.get("/exam-analysis/:classRoomId/:examId/merit-list/pdf", requireRole("AD
     doc.text(s.admissionNo, col.adm, y + 4, { width: 40 });
     doc.text(s.name, col.name, y + 4, { width: nameW - 2 });
     if (isMultiStream) {
-      doc.text(s.streamName || "—", streamX.stream, y + 4, { width: streamColW.stream - 2 });
+      doc.text(s.streamLabel || s.streamName || "—", streamX.stream, y + 4, { width: streamColW.stream - 2 });
       doc.text(String(s.streamPosition ?? "—"), streamX.streamPos, y + 4, { width: streamColW.streamPos - 2 });
     }
     s.subjects.forEach((sub, j) => {
@@ -1265,6 +1267,20 @@ router.get("/exam-analysis/:classRoomId/:examId/merit-list/pdf", requireRole("AD
 // overall CBC level (EE1..BE2, derived from totalPoints), not from individual subject grades.
 // Column 1 = class/stream name, column 2 = enrollment (headcount in that stream), remaining
 // columns = count of students at each level.
+// Short stream name for display ("Grade 8 East" -> "East"). Matching/ranking still uses the full
+// class name; this is for the Stream column on the merit list and report form only.
+function shortStreamLabel(c) {
+  if (!c) return null;
+  if (c.stream) return c.stream;
+  const name = c.name || "";
+  const level = c.level || "";
+  if (level && name.toLowerCase().startsWith(level.toLowerCase())) {
+    const rest = name.slice(level.length).trim();
+    if (rest) return rest;
+  }
+  return name;
+}
+
 function drawOverallDistributionTable(doc, { x, y, width, streamLevelDistribution, combinedLabel = null }) {
   const classW = 110;
   const enrollW = 60;

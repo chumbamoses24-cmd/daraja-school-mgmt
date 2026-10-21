@@ -1071,7 +1071,7 @@ export default function Grades() {
                 <p className="text-slate/60 text-sm">{reportCard.student.classRoom} · {reportCard.exam.name}, Term {reportCard.exam.term} {reportCard.exam.year}</p>
                 {reportCard.isMultiStream && (
                   <p className="text-slate/50 text-xs mt-1">
-                    Stream: {reportCard.streamName || "—"} · Stream position: {reportCard.streamPosition ?? "—"}
+                    Stream: {reportCard.streamLabel || reportCard.streamName || "—"} · Stream position: {reportCard.streamPosition ?? "—"}
                   </p>
                 )}
               </div>
