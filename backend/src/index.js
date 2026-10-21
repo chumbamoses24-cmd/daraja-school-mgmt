@@ -17,7 +17,9 @@ const app = express();
 // In production, restrict CORS to the deployed frontend URL only.
 // Locally (no FRONTEND_URL set), allow any origin for convenience.
 const allowedOrigin = process.env.FRONTEND_URL;
-app.use(cors(allowedOrigin ? { origin: allowedOrigin } : {}));
+const corsOptions = { exposedHeaders: ["Content-Disposition", "X-Skipped-Students"] };
+if (allowedOrigin) corsOptions.origin = allowedOrigin;
+app.use(cors(corsOptions));
 app.use(express.json({ limit: "5mb" }));
 app.use(morgan("dev"));
 

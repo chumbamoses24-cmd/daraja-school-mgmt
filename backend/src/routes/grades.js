@@ -38,7 +38,7 @@ async function getSchoolBranding() {
 // position/class size when that's still recoverable (it is as long as the student hasn't since
 // moved to a different class; Student only tracks its *current* classRoomId, not history).
 // Returns null if there's no earlier graded exam to compare against (e.g. their first exam).
-async function buildPreviousComparison(student, currentExam) {
+async function buildPreviousComparison(student, currentExam, cache) {
   const priorGrades = await prisma.grade.findMany({
     where: {
       studentId: student.id,
@@ -62,7 +62,7 @@ async function buildPreviousComparison(student, currentExam) {
   let position = null;
   let classSize = null;
   try {
-    const previousAnalysis = await buildExamAnalysis(previousExam.classRoomId, previousExam.id);
+    const previousAnalysis = await buildExamAnalysis(previousExam.classRoomId, previousExam.id, cache);
     const row = previousAnalysis.students.find((s) => s.id === student.id);
     if (row) {
       position = row.position;
@@ -109,7 +109,7 @@ async function buildFeeStatement(student, exam) {
 // stream ranking, fixed subject order, and full canonical subject list (blank where ungraded)
 // as the merit list and correction sheet — the three documents stay in sync by construction.
 // Throws { status, message } on not-found/forbidden so callers can respond appropriately.
-async function buildReportCard(studentId, examId, requestUser) {
+async function buildReportCard(studentId, examId, requestUser, cache) {
   if (requestUser.role === "PARENT") {
     const child = await prisma.student.findUnique({ where: { id: studentId } });
     if (!child || child.parentId !== requestUser.id) {
@@ -128,9 +128,9 @@ async function buildReportCard(studentId, examId, requestUser) {
   if (!student.classRoomId) throw { status: 400, message: "This student is not assigned to a class" };
 
   const [analysis, bands, previousComparison, feeStatement] = await Promise.all([
-    buildExamAnalysis(student.classRoomId, examId),
-    getGradingSystem(),
-    buildPreviousComparison(student, exam),
+    buildExamAnalysis(student.classRoomId, examId, cache),
+    cache ? (cache.bands ||= getGradingSystem()) : getGradingSystem(),
+    buildPreviousComparison(student, exam, cache),
     // Fee figures are admin-only — teachers and parents never get them on a report card.
     requestUser.role === "ADMIN" ? buildFeeStatement(student, exam) : Promise.resolve(null),
   ]);
@@ -808,13 +808,28 @@ router.get("/report-cards/class/:classRoomId/:examId/pdf", requireRole("ADMIN", 
   const exam = await prisma.exam.findUnique({ where: { id: examId }, include: { classRoom: { select: { name: true } } } });
   const fileName = `report-cards-${(exam?.classRoom?.name || "class").replace(/\s+/g, "-").toLowerCase()}-${req.params.examId}.pdf`;
 
-  let pages;
+  // One shared cache so the class analysis is computed once, not once per student; students are
+  // built one after another so the free-tier database isn't hit with dozens of parallel queries.
+  // A student with no marks for this exam (never sat it) is skipped instead of failing the whole
+  // download; a 403 (results not published yet) still stops everything.
+  const cache = new Map();
+  const pages = [];
+  const skipped = [];
   try {
-    pages = await Promise.all(students.map((s) => buildReportCard(s.id, examId, req.user)));
+    for (const s of students) {
+      try {
+        pages.push(await buildReportCard(s.id, examId, req.user, cache));
+      } catch (err) {
+        if (err.status === 404 || err.status === 400) skipped.push(`${s.firstName} ${s.lastName}`);
+        else throw err;
+      }
+    }
   } catch (err) {
     if (err.status) return res.status(err.status).json({ error: err.message });
     throw err;
   }
+  if (pages.length === 0) return res.status(404).json({ error: "No students in this class have results for this exam yet" });
+  if (skipped.length) res.setHeader("X-Skipped-Students", encodeURIComponent(skipped.join(", ")));
 
   res.setHeader("Content-Type", "application/pdf");
   res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
@@ -835,7 +850,21 @@ router.get("/report-cards/class/:classRoomId/:examId/pdf", requireRole("ADMIN", 
 // Streams under the same level (e.g. Grade 8 East / Grade 8 West) are ranked together as one
 // class, since they're really one cohort split for logistics rather than separate classes.
 // Throws { status, message } on not-found so callers can respond appropriately.
-async function buildExamAnalysis(classRoomId, examId) {
+// Optional `cache` (a Map) lets a batch job — e.g. the whole-class report-card PDF — compute each
+// class/exam analysis once and share it across every student, instead of redoing the whole-class
+// analysis from scratch per student (which made class-wide downloads time out on the free tier).
+function buildExamAnalysis(classRoomId, examId, cache) {
+  if (!cache) return buildExamAnalysisUncached(classRoomId, examId);
+  const key = `${classRoomId}:${examId}`;
+  if (!cache.has(key)) {
+    const p = buildExamAnalysisUncached(classRoomId, examId);
+    p.catch(() => cache.delete(key));
+    cache.set(key, p);
+  }
+  return cache.get(key);
+}
+
+async function buildExamAnalysisUncached(classRoomId, examId) {
   const exam = await prisma.exam.findUnique({ where: { id: examId }, include: { classRoom: true } });
   if (!exam) throw { status: 404, message: "Exam not found" };
 

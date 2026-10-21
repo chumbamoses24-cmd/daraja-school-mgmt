@@ -11,6 +11,8 @@ export default function Grades() {
   const [searchParams] = useSearchParams();
 
   const [classRooms, setClassRooms] = useState([]);
+  const [classPdfBusy, setClassPdfBusy] = useState(false);
+  const [classPdfMsg, setClassPdfMsg] = useState("");
   const [subjects, setSubjects] = useState([]);
   const [exams, setExams] = useState([]);
   const [students, setStudents] = useState([]);
@@ -432,20 +434,44 @@ export default function Grades() {
   }
 
   async function downloadClassReportCardsPdf() {
-    if (!classRoomId || !reportExamId) return;
-    const res = await client.get(`/grades/report-cards/class/${classRoomId}/${reportExamId}/pdf`, {
-      responseType: "blob",
-    });
-    const url = window.URL.createObjectURL(new Blob([res.data], { type: "application/pdf" }));
-    const link = document.createElement("a");
-    const disposition = res.headers["content-disposition"] || "";
-    const match = disposition.match(/filename="(.+)"/);
-    link.href = url;
-    link.download = match ? match[1] : "report-cards.pdf";
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    window.URL.revokeObjectURL(url);
+    if (!classRoomId || !reportExamId || classPdfBusy) return;
+    setClassPdfBusy(true);
+    setClassPdfMsg("");
+    try {
+      // Whole-class PDFs take a while on the free server (it may also be waking up), so allow
+      // up to 5 minutes instead of failing early.
+      const res = await client.get(`/grades/report-cards/class/${classRoomId}/${reportExamId}/pdf`, {
+        responseType: "blob",
+        timeout: 300000,
+      });
+      const url = window.URL.createObjectURL(new Blob([res.data], { type: "application/pdf" }));
+      const link = document.createElement("a");
+      const disposition = res.headers["content-disposition"] || "";
+      const match = disposition.match(/filename="(.+)"/);
+      link.href = url;
+      link.download = match ? match[1] : "report-cards.pdf";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+      const skipped = res.headers["x-skipped-students"];
+      if (skipped) setClassPdfMsg(`Downloaded. Skipped (no marks for this exam): ${decodeURIComponent(skipped)}`);
+    } catch (err) {
+      // The response is a blob, so the server's JSON error has to be read out of it.
+      let msg = "Could not download the report cards. Please try again.";
+      if (err.code === "ECONNABORTED") msg = "The server took too long. Please try again — it may have been waking up.";
+      else if (err.response?.data instanceof Blob) {
+        try {
+          const parsed = JSON.parse(await err.response.data.text());
+          if (parsed.error) msg = parsed.error;
+        } catch {
+          /* keep the default message */
+        }
+      }
+      setClassPdfMsg(msg);
+    } finally {
+      setClassPdfBusy(false);
+    }
   }
 
   return (
@@ -1057,9 +1083,10 @@ export default function Grades() {
                 {exams.map((ex) => <option key={ex.id} value={ex.id}>{ex.name} (Term {ex.term}, {ex.year})</option>)}
               </select>
             </div>
-            <button className="btn-primary" disabled={!reportExamId} onClick={downloadClassReportCardsPdf}>
-              Download all report cards (PDF)
+            <button className="btn-primary" disabled={!reportExamId || classPdfBusy} onClick={downloadClassReportCardsPdf}>
+              {classPdfBusy ? "Preparing report cards… please wait" : "Download all report cards (PDF)"}
             </button>
+            {classPdfMsg && <p className="text-sm mt-2 w-full">{classPdfMsg}</p>}
           </div>
         )}
 
