@@ -128,27 +128,65 @@ router.put("/invoices/:id", async (req, res) => {
   res.json(updated);
 });
 
-// Generate invoices for every student in a class from a fee structure
+// Generate invoices from fee structures. Two ways to call it:
+//  1) { feeStructureId }                      -> one class, one term (the original behaviour)
+//  2) { year, terms: [1,2,3], classRoomId? }  -> any mix of terms for a year, for one class or (if
+//     classRoomId is left out) every class that has a fee structure. Ticking all three terms invoices
+//     the whole year; ticking only some (e.g. 2 and 3) invoices just those. Students who already
+//     have an invoice for a given term/year are skipped, so it is safe to run again.
 router.post("/invoices/generate", requireRole("ADMIN"), async (req, res) => {
-  const schema = z.object({ feeStructureId: z.number() });
+  const schema = z.union([
+    z.object({ feeStructureId: z.number() }),
+    z.object({
+      year: z.number().int(),
+      terms: z.array(z.number().int().min(1).max(3)).min(1),
+      classRoomId: z.number().int().optional(),
+    }),
+  ]);
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
-  const fs = await prisma.feeStructure.findUnique({ where: { id: parsed.data.feeStructureId } });
-  if (!fs) return res.status(404).json({ error: "Fee structure not found" });
+  let structures;
+  if ("feeStructureId" in parsed.data) {
+    const one = await prisma.feeStructure.findUnique({ where: { id: parsed.data.feeStructureId } });
+    if (!one) return res.status(404).json({ error: "Fee structure not found" });
+    structures = [one];
+  } else {
+    const { year, terms, classRoomId } = parsed.data;
+    structures = await prisma.feeStructure.findMany({
+      where: { year, term: { in: terms }, ...(classRoomId ? { classRoomId } : {}) },
+    });
+    if (structures.length === 0) {
+      return res.status(404).json({ error: `No fee structure found for ${year} term(s) ${terms.join(", ")}. Create the fee structure first.` });
+    }
+  }
 
-  const students = await prisma.student.findMany({ where: { classRoomId: fs.classRoomId } });
-  // Don't double-invoice: skip students who already have an invoice for this term/year.
-  const already = await prisma.invoice.findMany({
-    where: { studentId: { in: students.map((s) => s.id) }, term: fs.term, year: fs.year },
-    select: { studentId: true },
-  });
-  const invoiced = new Set(already.map((i) => i.studentId));
-  const toCreate = students.filter((s) => !invoiced.has(s.id));
-  await prisma.invoice.createMany({
-    data: toCreate.map((s) => ({ studentId: s.id, term: fs.term, year: fs.year, amountDue: fs.amount })),
-  });
-  res.status(201).json({ created: toCreate.length, skipped: students.length - toCreate.length });
+  let created = 0;
+  let skipped = 0;
+  for (const fs of structures) {
+    const students = await prisma.student.findMany({ where: { classRoomId: fs.classRoomId, status: "ACTIVE" } });
+    const already = await prisma.invoice.findMany({
+      where: { studentId: { in: students.map((s) => s.id) }, term: fs.term, year: fs.year },
+      select: { studentId: true },
+    });
+    const invoiced = new Set(already.map((i) => i.studentId));
+    const toCreate = students.filter((s) => !invoiced.has(s.id));
+    if (toCreate.length) {
+      await prisma.invoice.createMany({
+        data: toCreate.map((s) => ({ studentId: s.id, term: fs.term, year: fs.year, amountDue: fs.amount })),
+      });
+    }
+    created += toCreate.length;
+    skipped += students.length - toCreate.length;
+  }
+
+  // Tell the admin which requested terms had no fee structure, so nothing is silently missed.
+  let missingTerms = [];
+  if (!("feeStructureId" in parsed.data)) {
+    const have = new Set(structures.map((s) => s.term));
+    missingTerms = parsed.data.terms.filter((t) => !have.has(t));
+  }
+  res.status(201).json({ created, skipped, structuresUsed: structures.length, missingTerms });
 });
 
 // ---- Payments ----

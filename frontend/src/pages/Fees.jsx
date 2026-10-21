@@ -26,6 +26,12 @@ export default function Fees() {
   const [generatingId, setGeneratingId] = useState(null);
   const [generatedMsg, setGeneratedMsg] = useState("");
 
+  // "Generate invoices by term/year": tick the terms to invoice (all three = whole year).
+  const thisYear = new Date().getFullYear();
+  const [genForm, setGenForm] = useState({ year: String(thisYear), classRoomId: "ALL", terms: { 1: true, 2: true, 3: true } });
+  const [genBusy, setGenBusy] = useState(false);
+  const [genError, setGenError] = useState("");
+
   const [showInvoiceForm, setShowInvoiceForm] = useState(false);
   const [invoiceForm, setInvoiceForm] = useState(emptyInvoiceForm);
   const [invoiceError, setInvoiceError] = useState("");
@@ -129,6 +135,30 @@ export default function Fees() {
     } finally {
       setGeneratingId(null);
       setTimeout(() => setGeneratedMsg(""), 4000);
+    }
+  }
+
+  async function handleGenerateByTerms() {
+    setGenError("");
+    setGeneratedMsg("");
+    const terms = [1, 2, 3].filter((t) => genForm.terms[t]);
+    if (terms.length === 0) { setGenError("Tick at least one term."); return; }
+    setGenBusy(true);
+    try {
+      const { data } = await client.post("/fees/invoices/generate", {
+        year: Number(genForm.year),
+        terms,
+        ...(genForm.classRoomId !== "ALL" ? { classRoomId: Number(genForm.classRoomId) } : {}),
+      });
+      let msg = `Created ${data.created} invoice(s).${data.skipped ? ` Skipped ${data.skipped} already invoiced.` : ""}`;
+      if (data.missingTerms?.length) msg += ` No fee structure set for Term ${data.missingTerms.join(", ")} ${genForm.year} — add one above.`;
+      setGeneratedMsg(msg);
+      setTimeout(() => setGeneratedMsg(""), 8000);
+      load();
+    } catch (err) {
+      setGenError(err.response?.data?.error?.formErrors?.join(", ") || err.response?.data?.error || "Could not generate invoices");
+    } finally {
+      setGenBusy(false);
     }
   }
 
@@ -353,6 +383,43 @@ export default function Fees() {
                 )}
               </tbody>
             </table>
+          </div>
+          <div className="card p-4 mt-4 space-y-3">
+            <div>
+              <h3 className="font-display font-semibold">Generate invoices by term or year</h3>
+              <p className="text-xs text-slate/60">
+                Tick the terms to invoice. All three ticked = the whole year. In Term 3 pick next year to invoice ahead; in Term 1 you can
+                untick Term 1 and keep Terms 2 and 3. Students already invoiced for a term are skipped.
+              </p>
+            </div>
+            <div className="flex gap-4 items-end flex-wrap">
+              <div>
+                <label className="block text-xs font-medium mb-1">Year</label>
+                <select className="input w-28" value={genForm.year} onChange={(e) => setGenForm({ ...genForm, year: e.target.value })}>
+                  {[thisYear - 1, thisYear, thisYear + 1].map((y) => <option key={y} value={y}>{y}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium mb-1">Class</label>
+                <select className="input" value={genForm.classRoomId} onChange={(e) => setGenForm({ ...genForm, classRoomId: e.target.value })}>
+                  <option value="ALL">All classes</option>
+                  {classRooms.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium mb-1">Terms</label>
+                <div className="flex gap-4 py-2">
+                  {[1, 2, 3].map((t) => (
+                    <label key={t} className="flex items-center gap-1.5 text-sm">
+                      <input type="checkbox" checked={!!genForm.terms[t]} onChange={(e) => setGenForm({ ...genForm, terms: { ...genForm.terms, [t]: e.target.checked } })} />
+                      Term {t}
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <button className="btn-primary" disabled={genBusy} onClick={handleGenerateByTerms}>{genBusy ? "Generating…" : "Generate invoices"}</button>
+            </div>
+            {genError && <p className="text-rust text-sm">{genError}</p>}
           </div>
           {generatedMsg && <p className="text-sm text-moss">{generatedMsg}</p>}
         </div>
