@@ -319,6 +319,7 @@ export default function ClassAnalysis() {
                     {examAnalysis.subjectColumns.map((s) => (
                       <th key={s.name} className="py-2 px-3 border border-line whitespace-nowrap" title={s.name}>{s.code}</th>
                     ))}
+                    <th className="py-2 px-3 border border-line">Total</th>
                     <th className="py-2 px-3 border border-line">Mean %</th>
                     <th className="py-2 px-3 border border-line">Pts</th>
                     <th className="py-2 px-3 border border-line">Mean Pts</th>
@@ -345,6 +346,7 @@ export default function ClassAnalysis() {
                           {sub.percentage != null ? `${sub.percentage}% (${sub.grade})` : "—"}
                         </td>
                       ))}
+                      <td className="py-2 px-3 border border-line font-mono">{s.totalScore}</td>
                       <td className="py-2 px-3 border border-line font-mono">{s.meanScore != null ? `${s.meanScore}%` : "—"}</td>
                       <td className="py-2 px-3 border border-line font-mono">{s.totalPoints}</td>
                       <td className="py-2 px-3 border border-line font-mono">{s.meanPoints ?? "—"}</td>
@@ -355,7 +357,7 @@ export default function ClassAnalysis() {
                     </tr>
                   ))}
                   {examAnalysis.students.filter((s) => s.sat).length === 0 && (
-                    <tr><td colSpan={8 + (examAnalysis.classRoom.isMultiStream ? 2 : 0) + examAnalysis.subjectColumns.length} className="py-6 text-center text-slate/50 border border-line">No students have sat this exam yet.</td></tr>
+                    <tr><td colSpan={9 + (examAnalysis.classRoom.isMultiStream ? 2 : 0) + examAnalysis.subjectColumns.length} className="py-6 text-center text-slate/50 border border-line">No students have sat this exam yet.</td></tr>
                   )}
                   {examAnalysis.students.some((s) => s.sat) && (
                     <tr className="bg-line/10 font-semibold">
@@ -368,6 +370,7 @@ export default function ClassAnalysis() {
                           </td>
                         );
                       })}
+                      <td className="py-2 px-3 border border-line"></td>
                       <td className="py-2 px-3 border border-line font-mono">
                         {examAnalysis.classMeanScore != null ? `${examAnalysis.classMeanScore}%` : "—"}
                       </td>

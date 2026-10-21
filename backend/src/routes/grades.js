@@ -1184,17 +1184,18 @@ router.get("/exam-analysis/:classRoomId/:examId/merit-list/pdf", requireRole("AD
   const streamColW = { stream: 42, streamPos: 30 };
   const streamX = { stream: margin + 60 + nameW, streamPos: margin + 60 + nameW + streamColW.stream };
   const leftW = isMultiStream ? 60 + nameW + streamColW.stream + streamColW.streamPos : 60 + nameW;
-  const rightColW = { mean: 36, pts: 24, mpts: 32, level: 30, dev: 28 };
+  const rightColW = { total: 30, mean: 36, pts: 24, mpts: 32, level: 30, dev: 28 };
   const rightTotalW = Object.values(rightColW).reduce((a, b) => a + b, 0);
   const subjectsStart = margin + leftW;
   const subjectColWidth = Math.max(24, Math.min(56, (pageWidth - leftW - rightTotalW) / Math.max(data.subjectCount, 1)));
   const totalsX = subjectsStart + data.subjectCount * subjectColWidth;
   const rightX = {
-    mean: totalsX,
-    pts: totalsX + rightColW.mean,
-    mpts: totalsX + rightColW.mean + rightColW.pts,
-    level: totalsX + rightColW.mean + rightColW.pts + rightColW.mpts,
-    dev: totalsX + rightColW.mean + rightColW.pts + rightColW.mpts + rightColW.level,
+    total: totalsX,
+    mean: totalsX + rightColW.total,
+    pts: totalsX + rightColW.total + rightColW.mean,
+    mpts: totalsX + rightColW.total + rightColW.mean + rightColW.pts,
+    level: totalsX + rightColW.total + rightColW.mean + rightColW.pts + rightColW.mpts,
+    dev: totalsX + rightColW.total + rightColW.mean + rightColW.pts + rightColW.mpts + rightColW.level,
   };
   const tableRight = rightX.dev + rightColW.dev;
   let y = contentY;
@@ -1214,6 +1215,7 @@ router.get("/exam-analysis/:classRoomId/:examId/merit-list/pdf", requireRole("AD
     data.subjectColumns.forEach((s, i) => {
       doc.text((s.code || s.name).toUpperCase(), subjectsStart + i * subjectColWidth, y + 6, { width: subjectColWidth - 2 });
     });
+    doc.text("TOTAL", rightX.total, y + 6, { width: rightColW.total - 2 });
     doc.text("MEAN%", rightX.mean, y + 6, { width: rightColW.mean - 2 });
     doc.text("PTS", rightX.pts, y + 6, { width: rightColW.pts - 2 });
     doc.text("M.PTS", rightX.mpts, y + 6, { width: rightColW.mpts - 2 });
@@ -1247,6 +1249,7 @@ router.get("/exam-analysis/:classRoomId/:examId/merit-list/pdf", requireRole("AD
       const text = sub.percentage != null ? `${sub.percentage}(${sub.grade})` : "—";
       doc.text(text, subjectsStart + j * subjectColWidth, y + 4, { width: subjectColWidth - 2 });
     });
+    doc.text(String(s.totalScore), rightX.total, y + 4, { width: rightColW.total - 2 });
     doc.text(s.meanScore != null ? `${s.meanScore}%` : "—", rightX.mean, y + 4, { width: rightColW.mean - 2 });
     doc.text(String(s.totalPoints), rightX.pts, y + 4, { width: rightColW.pts - 2 });
     doc.text(s.meanPoints != null ? String(s.meanPoints) : "—", rightX.mpts, y + 4, { width: rightColW.mpts - 2 });
