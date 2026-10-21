@@ -370,11 +370,11 @@ export default function ClassAnalysis() {
                           </td>
                         );
                       })}
-                      <td className="py-2 px-3 border border-line"></td>
+                      <td className="py-2 px-3 border border-line font-mono">{examAnalysis.classMeanTotal ?? "—"}</td>
                       <td className="py-2 px-3 border border-line font-mono">
                         {examAnalysis.classMeanScore != null ? `${examAnalysis.classMeanScore}%` : "—"}
                       </td>
-                      <td className="py-2 px-3 border border-line"></td>
+                      <td className="py-2 px-3 border border-line font-mono">{examAnalysis.classMeanTotalPoints ?? "—"}</td>
                       <td className="py-2 px-3 border border-line font-mono">{examAnalysis.classMeanPoints ?? "—"}</td>
                       <td className="py-2 px-3 border border-line"></td>
                       <td className="py-2 px-3 border border-line"></td>

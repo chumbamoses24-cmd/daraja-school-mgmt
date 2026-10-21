@@ -1058,6 +1058,15 @@ async function buildExamAnalysisUncached(classRoomId, examId) {
     ? Number((gradedStudents.reduce((s, st) => s + (st.meanPoints || 0), 0) / gradedStudents.length).toFixed(2))
     : null;
 
+  // Class averages for the merit list's Total (marks) and Pts columns, so the Average row has a
+  // figure under every numeric column, not just the subjects and means.
+  const classMeanTotal = gradedStudents.length
+    ? Math.round(gradedStudents.reduce((s, st) => s + (st.totalScore || 0), 0) / gradedStudents.length)
+    : null;
+  const classMeanTotalPoints = gradedStudents.length
+    ? Math.round(gradedStudents.reduce((s, st) => s + (st.totalPoints || 0), 0) / gradedStudents.length)
+    : null;
+
   const boys = studentRows.filter((s) => s.gender === "Male" && s.meanScore != null);
   const girls = studentRows.filter((s) => s.gender === "Female" && s.meanScore != null);
   const genderComparison = {
@@ -1093,6 +1102,8 @@ async function buildExamAnalysisUncached(classRoomId, examId) {
     totalMarks,
     classMeanScore,
     classMeanPoints,
+    classMeanTotal,
+    classMeanTotalPoints,
     classDistribution,
     classDistributionByGender,
     streamLevelDistribution,
@@ -1270,7 +1281,9 @@ router.get("/exam-analysis/:classRoomId/:examId/merit-list/pdf", requireRole("AD
       const mean = subjectMeanByName[s.name];
       doc.text(mean != null ? `${mean}%` : "—", subjectsStart + j * subjectColWidth, y + 5, { width: subjectColWidth - 2 });
     });
+    doc.text(data.classMeanTotal != null ? String(data.classMeanTotal) : "—", rightX.total, y + 5, { width: rightColW.total - 2 });
     doc.text(data.classMeanScore != null ? `${data.classMeanScore}%` : "—", rightX.mean, y + 5, { width: rightColW.mean - 2 });
+    doc.text(data.classMeanTotalPoints != null ? String(data.classMeanTotalPoints) : "—", rightX.pts, y + 5, { width: rightColW.pts - 2 });
     doc.text(data.classMeanPoints != null ? String(data.classMeanPoints) : "—", rightX.mpts, y + 5, { width: rightColW.mpts - 2 });
     y += avgRowHeight + 16;
 
