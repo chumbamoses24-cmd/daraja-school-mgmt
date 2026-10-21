@@ -138,6 +138,12 @@ async function buildReportCard(studentId, examId, requestUser) {
   if (!row) throw { status: 404, message: "No results found for this student in this exam" };
 
   const average = row.meanScore ?? 0;
+  // Report-form marks are always percentages, never raw scores: the total is the sum of the
+  // per-subject percentages shown in the BREAKDOWN table (so the column visibly adds up).
+  const totalPercent = row.subjects.reduce(
+    (sum, s) => sum + (s.score != null && s.maxScore ? Math.round((s.score / s.maxScore) * 100) : 0),
+    0
+  );
   const trend =
     previousComparison?.meanScore == null
       ? null
@@ -179,6 +185,7 @@ async function buildReportCard(studentId, examId, requestUser) {
       comment: subjectComment(s.subject, s.score != null && s.maxScore ? Math.round((s.score / s.maxScore) * 100) : null, s.grade),
     })),
     totalScore: row.totalScore,
+    totalPercent,
     totalPoints: row.totalPoints,
     meanPoints: row.meanPoints,
     position: row.position,
@@ -610,7 +617,7 @@ function drawReportCardPage(doc, data, branding = { schoolName: "My School", log
   drawInfoCell(margin + infoColW[0] + infoColW[1], infoColW[2], "ADM:", data.student.admissionNo);
   y += infoRowHeight;
   drawInfoCell(margin, infoColW[0], "CLASS:", data.student.classRoom || "—");
-  drawInfoCell(margin + infoColW[0], infoColW[1], "TOTAL MARKS:", data.totalScore);
+  drawInfoCell(margin + infoColW[0], infoColW[1], "TOTAL MARKS:", data.totalPercent);
   drawInfoCell(margin + infoColW[0] + infoColW[1], infoColW[2], "AVERAGE:", `${data.average}%`);
   y += infoRowHeight;
   drawInfoCell(margin, infoColW[0], "TOTAL POINTS:", data.totalPoints);
@@ -679,7 +686,7 @@ function drawReportCardPage(doc, data, branding = { schoolName: "My School", log
   };
   drawRow(["SUBJECT", "MARKS", "LEVEL", "TEACHER", "COMMENT"], { header: true });
   data.subjects.forEach((s) => {
-    drawRow([s.subject, s.score ?? "", s.grade ?? "", s.teacher ?? "—", s.comment ?? ""]);
+    drawRow([s.subject, s.percentage != null ? `${s.percentage}%` : "", s.grade ?? "", s.teacher ?? "—", s.comment ?? ""]);
   });
   y += 14;
 

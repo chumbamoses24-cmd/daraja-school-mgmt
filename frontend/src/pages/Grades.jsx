@@ -1108,8 +1108,7 @@ export default function Grades() {
               <thead>
                 <tr className="text-left text-slate/50 uppercase text-xs tracking-wider border-b border-line">
                   <th className="py-2">Subject</th>
-                  <th className="py-2">Score</th>
-                  <th className="py-2">%</th>
+                  <th className="py-2">Marks (%)</th>
                   <th className="py-2">Grade</th>
                   <th className="py-2">Teacher</th>
                   <th className="py-2">Comment</th>
@@ -1119,8 +1118,7 @@ export default function Grades() {
                 {reportCard.subjects.map((subj, i) => (
                   <tr key={i} className="border-b border-line/60">
                     <td className="py-2">{subj.subject}</td>
-                    <td className="py-2">{subj.score}/{subj.maxScore}</td>
-                    <td className="py-2">{subj.percentage}%</td>
+                    <td className="py-2">{subj.percentage != null ? `${subj.percentage}%` : ""}</td>
                     <td className="py-2 font-medium">{subj.grade}</td>
                     <td className="py-2 text-slate/60">{subj.teacher || "—"}</td>
                     <td className="py-2 text-slate/60 italic">{subj.comment || "—"}</td>
