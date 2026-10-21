@@ -195,6 +195,46 @@ export default function Fees() {
     }
   }
 
+  async function deleteStructure(s) {
+    if (!window.confirm(`Delete this fee structure (${s.classRoom?.name || "class"}, Term ${s.term} ${s.year}, KES ${s.amount})?`)) return;
+    const withInvoices = window.confirm(
+      "Also delete the invoices already generated from it for this class, term and year?\n\nOK = delete them too (invoices that already have payments are kept).\nCancel = keep the invoices, delete only the fee structure."
+    );
+    try {
+      const { data } = await client.delete(`/fees/structures/${s.id}`, { params: { withInvoices } });
+      setGeneratedMsg(
+        withInvoices
+          ? `Fee structure deleted. ${data.invoicesDeleted} invoice(s) removed${data.invoicesKept ? `, ${data.invoicesKept} kept because they have payments` : ""}.`
+          : "Fee structure deleted."
+      );
+      setTimeout(() => setGeneratedMsg(""), 5000);
+      load();
+    } catch (err) {
+      window.alert(err.response?.data?.error || "Could not delete fee structure");
+    }
+  }
+
+  async function deleteInvoice(inv) {
+    const who = `${inv.student.firstName} ${inv.student.lastName}`;
+    if (!window.confirm(`Delete the Term ${inv.term} ${inv.year} invoice for ${who} (KES ${inv.amountDue})?`)) return;
+    try {
+      await client.delete(`/fees/invoices/${inv.id}`);
+      load();
+    } catch (err) {
+      if (err.response?.status === 409 && err.response?.data?.hasPayments) {
+        if (!window.confirm(`${err.response.data.error}\n\nDelete the invoice and its payments anyway?`)) return;
+        try {
+          await client.delete(`/fees/invoices/${inv.id}`, { params: { force: true } });
+          load();
+        } catch (err2) {
+          window.alert(err2.response?.data?.error || "Could not delete invoice");
+        }
+      } else {
+        window.alert(err.response?.data?.error || "Could not delete invoice");
+      }
+    }
+  }
+
   async function handleCreateInvoice(e) {
     e.preventDefault();
     setInvoiceError("");
@@ -250,6 +290,7 @@ export default function Fees() {
             ) : (
               <>
                 <button className="btn-secondary text-xs" onClick={() => { setEditError(""); setEditingInvoice({ id: inv.id, amountDue: String(inv.amountDue), term: String(inv.term), year: String(inv.year) }); }}>Edit</button>
+                <button className="btn-secondary text-xs text-rust" onClick={() => deleteInvoice(inv)}>Delete</button>
                 {inv.status !== "PAID" && (
                   <>
                     <input
@@ -372,6 +413,7 @@ export default function Fees() {
                             <button className="btn-secondary text-xs" disabled={generatingId === s.id} onClick={() => handleGenerateInvoices(s.id)}>
                               {generatingId === s.id ? "Generating…" : "Generate invoices"}
                             </button>
+                            <button className="btn-secondary text-xs text-rust" onClick={() => deleteStructure(s)}>Delete</button>
                           </div>
                         )}
                       </td>

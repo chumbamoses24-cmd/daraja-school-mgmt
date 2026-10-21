@@ -69,6 +69,33 @@ router.put("/structures/:id", async (req, res) => {
   res.json({ structure, invoicesUpdated });
 });
 
+// Delete a fee structure created by mistake. Invoices already generated from it are separate
+// records and are kept, unless ?withInvoices=true — then this class's invoices for that term/year
+// are removed too, but only the ones with no payments recorded (money is never silently deleted).
+router.delete("/structures/:id", async (req, res) => {
+  const id = Number(req.params.id);
+  const existing = await prisma.feeStructure.findUnique({ where: { id } });
+  if (!existing) return res.status(404).json({ error: "Fee structure not found" });
+
+  let invoicesDeleted = 0;
+  let invoicesKept = 0;
+  if (req.query.withInvoices === "true") {
+    const students = await prisma.student.findMany({ where: { classRoomId: existing.classRoomId }, select: { id: true } });
+    const invoices = await prisma.invoice.findMany({
+      where: { studentId: { in: students.map((s) => s.id) }, term: existing.term, year: existing.year },
+      include: { _count: { select: { payments: true } } },
+    });
+    const removable = invoices.filter((i) => i._count.payments === 0 && i.amountPaid === 0).map((i) => i.id);
+    invoicesKept = invoices.length - removable.length;
+    if (removable.length) {
+      const r = await prisma.invoice.deleteMany({ where: { id: { in: removable } } });
+      invoicesDeleted = r.count;
+    }
+  }
+  await prisma.feeStructure.delete({ where: { id } });
+  res.json({ deleted: true, invoicesDeleted, invoicesKept });
+});
+
 // ---- Invoices ----
 router.get("/invoices", async (req, res) => {
   const { studentId } = req.query;
@@ -126,6 +153,25 @@ router.put("/invoices/:id", async (req, res) => {
     data: { ...parsed.data, status: statusFor(invoice.amountPaid, amountDue) },
   });
   res.json(updated);
+});
+
+// Delete an invoice created by mistake. If payments were already recorded against it, the caller
+// must pass ?force=true (the UI asks for an extra confirmation) and those payments are removed with it.
+router.delete("/invoices/:id", async (req, res) => {
+  const id = Number(req.params.id);
+  const invoice = await prisma.invoice.findUnique({ where: { id }, include: { _count: { select: { payments: true } } } });
+  if (!invoice) return res.status(404).json({ error: "Invoice not found" });
+  if (invoice._count.payments > 0 && req.query.force !== "true") {
+    return res.status(409).json({
+      error: `This invoice has ${invoice._count.payments} payment(s) recorded. Deleting it will remove them too.`,
+      hasPayments: true,
+    });
+  }
+  await prisma.$transaction([
+    prisma.payment.deleteMany({ where: { invoiceId: id } }),
+    prisma.invoice.delete({ where: { id } }),
+  ]);
+  res.json({ deleted: true });
 });
 
 // Generate invoices from fee structures. Two ways to call it:
