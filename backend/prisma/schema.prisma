@@ -36,6 +36,8 @@ model User {
   firstName          String
   lastName           String
   mustChangePassword Boolean       @default(false)
+  photo              String?       // base64 data URI, passport-size photo (optional, set from My profile)
+  signature          String?       // base64 data URI, image of the user's signature (optional, set from My profile)
   createdAt          DateTime      @default(now())
 
   // Teacher-specific relations

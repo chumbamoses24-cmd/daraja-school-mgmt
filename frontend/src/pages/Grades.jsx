@@ -1159,6 +1159,16 @@ export default function Grades() {
                 <span className="italic text-slate/80">{reportCard.classTeacherComment}</span>
               </div>
             )}
+            {reportCard.classTeacher && (
+              <div className="mt-2 text-sm flex items-end gap-3">
+                <span className="text-slate/50 uppercase text-xs tracking-wider">Class Teacher's Signature: </span>
+                {reportCard.classTeacher.signature ? (
+                  <img src={reportCard.classTeacher.signature} alt="Class teacher signature" className="h-10 max-w-[200px] object-contain bg-white" />
+                ) : (
+                  <span className="text-slate/40 text-xs italic">not uploaded yet ({reportCard.classTeacher.name} can add it under My profile)</span>
+                )}
+              </div>
+            )}
             {reportCard.headTeacherComment && (
               <div className="mt-2 text-sm">
                 <span className="text-slate/50 uppercase text-xs tracking-wider">Head Teacher's Remarks: </span>

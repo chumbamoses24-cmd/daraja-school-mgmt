@@ -118,7 +118,10 @@ async function buildReportCard(studentId, examId, requestUser, cache) {
   }
 
   const [student, exam] = await Promise.all([
-    prisma.student.findUnique({ where: { id: studentId }, include: { classRoom: true } }),
+    prisma.student.findUnique({
+      where: { id: studentId },
+      include: { classRoom: { include: { teacher: { select: { firstName: true, lastName: true, signature: true } } } } },
+    }),
     prisma.exam.findUnique({ where: { id: examId } }),
   ]);
   if (!student || !exam) throw { status: 404, message: "Student or exam not found" };
@@ -194,6 +197,14 @@ async function buildReportCard(studentId, examId, requestUser, cache) {
     average,
     overallGrade: gradeForPercent(average, bands).grade,
     previousComparison: previousComparison ? { ...previousComparison, trend } : null,
+    // The student's own stream's class (homeroom) teacher — signature is the image they uploaded
+    // under My profile, printed in the class teacher's signature space on the report form.
+    classTeacher: student.classRoom?.teacher
+      ? {
+          name: `${student.classRoom.teacher.firstName} ${student.classRoom.teacher.lastName}`,
+          signature: student.classRoom.teacher.signature || null,
+        }
+      : null,
     classTeacherComment: classTeacherComment(row.totalPoints),
     headTeacherComment: headTeacherComment(row.totalPoints),
     feeStatement,
@@ -741,8 +752,17 @@ function drawReportCardPage(doc, data, branding = { schoolName: "My School", log
     .font("Helvetica-Oblique")
     .fontSize(9)
     .text(data.classTeacherComment || "", margin + 175, y, { width: margin + pageWidth - (margin + 175), underline: true });
-  y += 28;
-  doc.font("Helvetica-Bold").text("SIGNATURE", margin + 220, y);
+  y += 44;
+  doc.font("Helvetica-Bold").fontSize(9.5).fillColor(REPORT_SLATE).text("SIGNATURE", margin + 220, y);
+  // Class teacher's uploaded signature, fitted into the space above the dotted line.
+  if (data.classTeacher?.signature) {
+    try {
+      const sigBuf = Buffer.from(data.classTeacher.signature.split(",").pop(), "base64");
+      doc.image(sigBuf, margin + 300, y - 20, { fit: [pageWidth - 300, 27], align: "center", valign: "bottom" });
+    } catch {
+      // Malformed signature data — leave the line blank rather than breaking the PDF.
+    }
+  }
   dottedLine(doc, margin + 300, margin + pageWidth, y + 8);
   y += 30;
 

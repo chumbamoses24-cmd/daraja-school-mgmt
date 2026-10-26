@@ -47,7 +47,7 @@ router.post("/login", async (req, res) => {
 router.get("/me", requireAuth, async (req, res) => {
   const user = await prisma.user.findUnique({
     where: { id: req.user.id },
-    select: { id: true, email: true, role: true, firstName: true, lastName: true, phone: true, mustChangePassword: true },
+    select: { id: true, email: true, role: true, firstName: true, lastName: true, phone: true, mustChangePassword: true, photo: true, signature: true },
   });
   res.json(user);
 });
@@ -57,15 +57,20 @@ const updateProfileSchema = z.object({
   lastName: z.string().min(1),
   phone: z.string().optional(),
   email: z.string().email().optional().or(z.literal("")),
+  // base64 image data URIs; "" clears the image
+  photo: z.string().max(700000).refine((v) => v === "" || v.startsWith("data:image/"), "Must be an image").optional(),
+  signature: z.string().max(700000).refine((v) => v === "" || v.startsWith("data:image/"), "Must be an image").optional(),
 });
 
-// Self-service profile edit (name, phone, email). Role is not editable here.
+// Self-service profile edit (name, phone, email, passport photo, signature). Role is not editable here.
 router.put("/me", requireAuth, async (req, res) => {
   const parsed = updateProfileSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
   const data = { ...parsed.data };
   if (data.email === "") data.email = null;
+  if (data.photo === "") data.photo = null;
+  if (data.signature === "") data.signature = null;
 
   if (data.email) {
     const existing = await prisma.user.findUnique({ where: { email: data.email } });
@@ -75,7 +80,7 @@ router.put("/me", requireAuth, async (req, res) => {
   const user = await prisma.user.update({
     where: { id: req.user.id },
     data,
-    select: { id: true, email: true, role: true, firstName: true, lastName: true, phone: true, mustChangePassword: true },
+    select: { id: true, email: true, role: true, firstName: true, lastName: true, phone: true, mustChangePassword: true, photo: true, signature: true },
   });
   res.json(user);
 });
