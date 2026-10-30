@@ -1030,9 +1030,25 @@ async function buildExamAnalysisUncached(classRoomId, examId) {
     };
   });
 
-  // Rank by mean points (desc), students with no grades sink to the bottom
-  const ranked = [...studentRows].sort((a, b) => (b.meanPoints ?? -1) - (a.meanPoints ?? -1));
-  ranked.forEach((s, i) => (s.position = s.meanPoints != null ? i + 1 : null));
+  // Rank by total points (desc); where total points tie, the higher mean % wins. Students with
+  // no grades sink to the bottom. Only students tied on BOTH points and mean share a position.
+  const byPointsThenMean = (a, b) => {
+    if (!a.sat !== !b.sat) return a.sat ? -1 : 1;
+    if (b.totalPoints !== a.totalPoints) return b.totalPoints - a.totalPoints;
+    return (b.meanScore ?? -1) - (a.meanScore ?? -1);
+  };
+  const assignPositions = (list, field) => {
+    let prev = null;
+    let pos = 0;
+    list.forEach((s, i) => {
+      if (!s.sat) { s[field] = null; return; }
+      if (!prev || prev.totalPoints !== s.totalPoints || prev.meanScore !== s.meanScore) pos = i + 1;
+      s[field] = pos;
+      prev = s;
+    });
+  };
+  const ranked = [...studentRows].sort(byPointsThenMean);
+  assignPositions(ranked, "position");
 
   // Position within the student's own stream, separate from the combined cross-stream
   // `position` above — only meaningful when the level actually has more than one stream;
@@ -1041,8 +1057,8 @@ async function buildExamAnalysisUncached(classRoomId, examId) {
     siblingClassRooms.forEach((c) => {
       const streamRanked = studentRows
         .filter((s) => s.streamName === c.name)
-        .sort((a, b) => (b.meanPoints ?? -1) - (a.meanPoints ?? -1));
-      streamRanked.forEach((s, i) => (s.streamPosition = s.meanPoints != null ? i + 1 : null));
+        .sort(byPointsThenMean);
+      assignPositions(streamRanked, "streamPosition");
     });
   } else {
     studentRows.forEach((s) => (s.streamPosition = null));
