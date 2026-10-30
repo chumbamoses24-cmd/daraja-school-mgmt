@@ -114,7 +114,7 @@ export default function ClassAnalysis() {
         <div className="card p-5">
           <p className="text-xs uppercase tracking-wider text-slate/50 font-mono mb-2">Overall average (all exams)</p>
           <p className="text-3xl font-display font-semibold text-ink">
-            {data.classOverallAverage != null ? `${data.classOverallAverage}%` : "—"}
+            {data.classOverallAverage != null ? `${data.classOverallAverage.toFixed(2)}%` : "—"}
           </p>
         </div>
       </div>
@@ -211,13 +211,13 @@ export default function ClassAnalysis() {
               <div className="card p-4">
                 <p className="text-xs uppercase tracking-wider text-slate/50 font-mono mb-1">Mean score</p>
                 <p className="text-2xl font-display font-semibold text-ink">
-                  {examAnalysis.classMeanScore != null ? `${examAnalysis.classMeanScore}%` : "—"}
+                  {examAnalysis.classMeanScore != null ? `${examAnalysis.classMeanScore.toFixed(2)}%` : "—"}
                 </p>
               </div>
               <div className="card p-4">
                 <p className="text-xs uppercase tracking-wider text-slate/50 font-mono mb-1">Mean points</p>
                 <p className="text-2xl font-display font-semibold text-ink">
-                  {examAnalysis.classMeanPoints != null ? examAnalysis.classMeanPoints : "—"}
+                  {examAnalysis.classMeanPoints != null ? examAnalysis.classMeanPoints.toFixed(2) : "—"}
                 </p>
               </div>
             </div>
@@ -234,7 +234,7 @@ export default function ClassAnalysis() {
                       <div className="flex-1 h-2 bg-line/30 rounded-full overflow-hidden">
                         <div className="h-full bg-ink rounded-full" style={{ width: `${s.mean}%` }} />
                       </div>
-                      <span className="text-sm font-mono w-12 text-right">{s.mean}%</span>
+                      <span className="text-sm font-mono w-16 text-right">{Number(s.mean).toFixed(2)}%</span>
                     </div>
                   ))}
                 </div>
@@ -253,13 +253,13 @@ export default function ClassAnalysis() {
                 <div>
                   <p className="text-xs uppercase tracking-wider text-slate/50 font-mono mb-1">Boys ({examAnalysis.genderComparison.boys.count})</p>
                   <p className="text-2xl font-display font-semibold text-ink">
-                    {examAnalysis.genderComparison.boys.meanScore != null ? `${examAnalysis.genderComparison.boys.meanScore}%` : "—"}
+                    {examAnalysis.genderComparison.boys.meanScore != null ? `${examAnalysis.genderComparison.boys.meanScore.toFixed(2)}%` : "—"}
                   </p>
                 </div>
                 <div>
                   <p className="text-xs uppercase tracking-wider text-slate/50 font-mono mb-1">Girls ({examAnalysis.genderComparison.girls.count})</p>
                   <p className="text-2xl font-display font-semibold text-ink">
-                    {examAnalysis.genderComparison.girls.meanScore != null ? `${examAnalysis.genderComparison.girls.meanScore}%` : "—"}
+                    {examAnalysis.genderComparison.girls.meanScore != null ? `${examAnalysis.genderComparison.girls.meanScore.toFixed(2)}%` : "—"}
                   </p>
                 </div>
               </div>
@@ -347,12 +347,12 @@ export default function ClassAnalysis() {
                         </td>
                       ))}
                       <td className="py-2 px-3 border border-line font-mono">{s.totalScore}</td>
-                      <td className="py-2 px-3 border border-line font-mono">{s.meanScore != null ? `${s.meanScore}%` : "—"}</td>
+                      <td className="py-2 px-3 border border-line font-mono">{s.meanScore != null ? `${s.meanScore.toFixed(2)}%` : "—"}</td>
                       <td className="py-2 px-3 border border-line font-mono">{s.totalPoints}</td>
-                      <td className="py-2 px-3 border border-line font-mono">{s.meanPoints ?? "—"}</td>
+                      <td className="py-2 px-3 border border-line font-mono">{s.meanPoints != null ? s.meanPoints.toFixed(2) : "—"}</td>
                       <td className="py-2 px-3 border border-line font-mono">{s.level || "—"}</td>
                       <td className="py-2 px-3 border border-line font-mono">
-                        {s.deviation == null ? "—" : s.deviation > 0 ? `+${s.deviation}` : s.deviation}
+                        {s.deviation == null ? "—" : s.deviation > 0 ? `+${s.deviation.toFixed(2)}` : s.deviation.toFixed(2)}
                       </td>
                     </tr>
                   ))}
@@ -366,16 +366,16 @@ export default function ClassAnalysis() {
                         const subj = examAnalysis.subjects.find((s) => s.subject === col.name);
                         return (
                           <td key={col.name} className="py-2 px-3 border border-line font-mono">
-                            {subj ? `${subj.mean}%` : "—"}
+                            {subj ? `${Number(subj.mean).toFixed(2)}%` : "—"}
                           </td>
                         );
                       })}
-                      <td className="py-2 px-3 border border-line font-mono">{examAnalysis.classMeanTotal ?? "—"}</td>
+                      <td className="py-2 px-3 border border-line font-mono">{examAnalysis.classMeanTotal != null ? examAnalysis.classMeanTotal.toFixed(2) : "—"}</td>
                       <td className="py-2 px-3 border border-line font-mono">
-                        {examAnalysis.classMeanScore != null ? `${examAnalysis.classMeanScore}%` : "—"}
+                        {examAnalysis.classMeanScore != null ? `${examAnalysis.classMeanScore.toFixed(2)}%` : "—"}
                       </td>
-                      <td className="py-2 px-3 border border-line font-mono">{examAnalysis.classMeanTotalPoints ?? "—"}</td>
-                      <td className="py-2 px-3 border border-line font-mono">{examAnalysis.classMeanPoints ?? "—"}</td>
+                      <td className="py-2 px-3 border border-line font-mono">{examAnalysis.classMeanTotalPoints != null ? examAnalysis.classMeanTotalPoints.toFixed(2) : "—"}</td>
+                      <td className="py-2 px-3 border border-line font-mono">{examAnalysis.classMeanPoints != null ? examAnalysis.classMeanPoints.toFixed(2) : "—"}</td>
                       <td className="py-2 px-3 border border-line"></td>
                       <td className="py-2 px-3 border border-line"></td>
                     </tr>
@@ -406,7 +406,7 @@ export default function ClassAnalysis() {
                   <Link to={`/students/${s.id}`} className="hover:underline text-ink">{s.name}</Link>
                 </td>
                 <td className="py-3 px-4">{s.attendanceRate != null ? `${s.attendanceRate}%` : "—"}</td>
-                <td className="py-3 px-4">{s.average != null ? `${s.average}%` : "—"}</td>
+                <td className="py-3 px-4">{s.average != null ? `${s.average.toFixed(2)}%` : "—"}</td>
               </tr>
             ))}
             {data.students.length === 0 && (

@@ -56,7 +56,7 @@ async function buildPreviousComparison(student, currentExam, cache) {
   const examGrades = priorGrades.filter((g) => g.examId === previousExam.id);
   const totalMax = examGrades.reduce((s, g) => s + g.maxScore, 0);
   const meanScore = totalMax
-    ? Math.round((examGrades.reduce((s, g) => s + g.score, 0) / totalMax) * 100)
+    ? Number(((examGrades.reduce((s, g) => s + g.score, 0) / totalMax) * 100).toFixed(2))
     : null;
 
   let position = null;
@@ -195,7 +195,7 @@ async function buildReportCard(studentId, examId, requestUser, cache) {
     position: row.position,
     classSize: analysis.students.length,
     average,
-    overallGrade: gradeForPercent(average, bands).grade,
+    overallGrade: gradeForPercent(Math.round(average), bands).grade,
     previousComparison: previousComparison ? { ...previousComparison, trend } : null,
     // The student's own stream's class (homeroom) teacher — signature is the image they uploaded
     // under My profile, printed in the class teacher's signature space on the report form.
@@ -568,6 +568,9 @@ router.get("/", async (req, res) => {
 // breakdown table in fixed canonical subject order, closing-date/next-term line, a class
 // teacher's remarks area, and a head teacher signature line, closed off with a red+navy rule.
 // Draws one report card onto the current page of an open PDFDocument. Does not call doc.end().
+// Averages are always shown to 2 decimal places on printouts and previews.
+const fmt2 = (n) => Number(n).toFixed(2);
+
 const REPORT_RED = "#C00000";
 const REPORT_BROWN = "#833C0B";
 const REPORT_INK = "#1B2A4A";
@@ -630,7 +633,7 @@ function drawReportCardPage(doc, data, branding = { schoolName: "My School", log
   y += infoRowHeight;
   drawInfoCell(margin, infoColW[0], "CLASS:", data.student.classRoom || "—");
   drawInfoCell(margin + infoColW[0], infoColW[1], "TOTAL MARKS:", data.totalPercent);
-  drawInfoCell(margin + infoColW[0] + infoColW[1], infoColW[2], "AVERAGE:", `${data.average}%`);
+  drawInfoCell(margin + infoColW[0] + infoColW[1], infoColW[2], "AVERAGE:", `${fmt2(data.average)}%`);
   y += infoRowHeight;
   drawInfoCell(margin, infoColW[0], "TOTAL POINTS:", data.totalPoints);
   drawInfoCell(margin + infoColW[0], infoColW[1], "POSITION:", `${data.position ?? "—"} out of ${data.classSize}`);
@@ -640,7 +643,7 @@ function drawReportCardPage(doc, data, branding = { schoolName: "My School", log
   // Comparison against the student's last exam, where one exists — blank (first exam on record)
   // otherwise rather than showing a misleading dash for every field.
   const prev = data.previousComparison;
-  drawInfoCell(margin, infoColW[0], "PREVIOUS EXAM:", prev ? `${prev.examLabel} — ${prev.meanScore ?? "—"}%` : "—");
+  drawInfoCell(margin, infoColW[0], "PREVIOUS EXAM:", prev ? `${prev.examLabel} — ${prev.meanScore != null ? fmt2(prev.meanScore) + "%" : "—"}` : "—");
   drawInfoCell(margin + infoColW[0], infoColW[1], "PREV. POSITION:", prev?.position ? `${prev.position}/${prev.classSize}` : "—");
   drawInfoCell(margin + infoColW[0] + infoColW[1], infoColW[2], "TREND:", prev?.trend || "—");
   y += infoRowHeight;
@@ -937,7 +940,7 @@ async function buildExamAnalysisUncached(classRoomId, examId) {
         byStudent[g.studentId].max += g.maxScore;
       });
       Object.entries(byStudent).forEach(([sid, { total, max }]) => {
-        previousMeanByStudent[Number(sid)] = max ? Math.round((total / max) * 100) : null;
+        previousMeanByStudent[Number(sid)] = max ? Number(((total / max) * 100).toFixed(2)) : null;
       });
     }
   } catch {
@@ -972,7 +975,7 @@ async function buildExamAnalysisUncached(classRoomId, examId) {
     const subjectGrades = grades.filter((g) => g.subject.name === name);
     const total = subjectGrades.reduce((s, g) => s + g.score, 0);
     const max = subjectGrades.reduce((s, g) => s + g.maxScore, 0);
-    const mean = max ? Math.round((total / max) * 100) : 0;
+    const mean = max ? Number(((total / max) * 100).toFixed(2)) : 0;
 
     const distribution = gradeCount();
     const distributionByGender = { Male: gradeCount(), Female: gradeCount() };
@@ -1001,12 +1004,12 @@ async function buildExamAnalysisUncached(classRoomId, examId) {
     });
     const totalScore = sGrades.reduce((sum, g) => sum + g.score, 0);
     const totalMax = sGrades.reduce((sum, g) => sum + g.maxScore, 0);
-    const meanScore = totalMax ? Math.round((totalScore / totalMax) * 100) : null;
+    const meanScore = totalMax ? Number(((totalScore / totalMax) * 100).toFixed(2)) : null;
     const totalPoints = subjects.reduce((sum, sub) => sum + (sub.points || 0), 0);
     const gradedSubjectCount = subjects.filter((sub) => sub.points != null).length;
     const meanPoints = gradedSubjectCount ? Number((totalPoints / gradedSubjectCount).toFixed(2)) : null;
     const previousMeanScore = previousMeanByStudent[s.id] ?? null;
-    const deviation = meanScore != null && previousMeanScore != null ? meanScore - previousMeanScore : null;
+    const deviation = meanScore != null && previousMeanScore != null ? Number((meanScore - previousMeanScore).toFixed(2)) : null;
 
     return {
       id: s.id,
@@ -1072,7 +1075,7 @@ async function buildExamAnalysisUncached(classRoomId, examId) {
 
   const gradedStudents = studentRows.filter((s) => s.meanScore != null);
   const classMeanScore = gradedStudents.length
-    ? Math.round(gradedStudents.reduce((s, st) => s + st.meanScore, 0) / gradedStudents.length)
+    ? Number((gradedStudents.reduce((s, st) => s + st.meanScore, 0) / gradedStudents.length).toFixed(2))
     : null;
   const classMeanPoints = gradedStudents.length
     ? Number((gradedStudents.reduce((s, st) => s + (st.meanPoints || 0), 0) / gradedStudents.length).toFixed(2))
@@ -1081,10 +1084,10 @@ async function buildExamAnalysisUncached(classRoomId, examId) {
   // Class averages for the merit list's Total (marks) and Pts columns, so the Average row has a
   // figure under every numeric column, not just the subjects and means.
   const classMeanTotal = gradedStudents.length
-    ? Math.round(gradedStudents.reduce((s, st) => s + (st.totalScore || 0), 0) / gradedStudents.length)
+    ? Number((gradedStudents.reduce((s, st) => s + (st.totalScore || 0), 0) / gradedStudents.length).toFixed(2))
     : null;
   const classMeanTotalPoints = gradedStudents.length
-    ? Math.round(gradedStudents.reduce((s, st) => s + (st.totalPoints || 0), 0) / gradedStudents.length)
+    ? Number((gradedStudents.reduce((s, st) => s + (st.totalPoints || 0), 0) / gradedStudents.length).toFixed(2))
     : null;
 
   const boys = studentRows.filter((s) => s.gender === "Male" && s.meanScore != null);
@@ -1092,11 +1095,11 @@ async function buildExamAnalysisUncached(classRoomId, examId) {
   const genderComparison = {
     boys: {
       count: boys.length,
-      meanScore: boys.length ? Math.round(boys.reduce((s, b) => s + b.meanScore, 0) / boys.length) : null,
+      meanScore: boys.length ? Number((boys.reduce((s, b) => s + b.meanScore, 0) / boys.length).toFixed(2)) : null,
     },
     girls: {
       count: girls.length,
-      meanScore: girls.length ? Math.round(girls.reduce((s, g) => s + g.meanScore, 0) / girls.length) : null,
+      meanScore: girls.length ? Number((girls.reduce((s, g) => s + g.meanScore, 0) / girls.length).toFixed(2)) : null,
     },
   };
 
@@ -1281,11 +1284,11 @@ router.get("/exam-analysis/:classRoomId/:examId/merit-list/pdf", requireRole("AD
       doc.text(text, subjectsStart + j * subjectColWidth, y + 4, { width: subjectColWidth - 2 });
     });
     doc.text(String(s.totalScore), rightX.total, y + 4, { width: rightColW.total - 2 });
-    doc.text(s.meanScore != null ? `${s.meanScore}%` : "—", rightX.mean, y + 4, { width: rightColW.mean - 2 });
+    doc.text(s.meanScore != null ? `${fmt2(s.meanScore)}%` : "—", rightX.mean, y + 4, { width: rightColW.mean - 2 });
     doc.text(String(s.totalPoints), rightX.pts, y + 4, { width: rightColW.pts - 2 });
-    doc.text(s.meanPoints != null ? String(s.meanPoints) : "—", rightX.mpts, y + 4, { width: rightColW.mpts - 2 });
+    doc.text(s.meanPoints != null ? fmt2(s.meanPoints) : "—", rightX.mpts, y + 4, { width: rightColW.mpts - 2 });
     doc.text(s.level || "—", rightX.level, y + 4, { width: rightColW.level - 2 });
-    const devText = s.deviation == null ? "—" : s.deviation > 0 ? `+${s.deviation}` : String(s.deviation);
+    const devText = s.deviation == null ? "—" : s.deviation > 0 ? `+${fmt2(s.deviation)}` : fmt2(s.deviation);
     doc.text(devText, rightX.dev, y + 4, { width: rightColW.dev - 2 });
     y += rowHeight;
   });
@@ -1299,12 +1302,12 @@ router.get("/exam-analysis/:classRoomId/:examId/merit-list/pdf", requireRole("AD
     doc.text("AVERAGE", col.name, y + 5, { width: nameW - 2 });
     data.subjectColumns.forEach((s, j) => {
       const mean = subjectMeanByName[s.name];
-      doc.text(mean != null ? `${mean}%` : "—", subjectsStart + j * subjectColWidth, y + 5, { width: subjectColWidth - 2 });
+      doc.text(mean != null ? `${fmt2(mean)}%` : "—", subjectsStart + j * subjectColWidth, y + 5, { width: subjectColWidth - 2 });
     });
-    doc.text(data.classMeanTotal != null ? String(data.classMeanTotal) : "—", rightX.total, y + 5, { width: rightColW.total - 2 });
-    doc.text(data.classMeanScore != null ? `${data.classMeanScore}%` : "—", rightX.mean, y + 5, { width: rightColW.mean - 2 });
-    doc.text(data.classMeanTotalPoints != null ? String(data.classMeanTotalPoints) : "—", rightX.pts, y + 5, { width: rightColW.pts - 2 });
-    doc.text(data.classMeanPoints != null ? String(data.classMeanPoints) : "—", rightX.mpts, y + 5, { width: rightColW.mpts - 2 });
+    doc.text(data.classMeanTotal != null ? fmt2(data.classMeanTotal) : "—", rightX.total, y + 5, { width: rightColW.total - 2 });
+    doc.text(data.classMeanScore != null ? `${fmt2(data.classMeanScore)}%` : "—", rightX.mean, y + 5, { width: rightColW.mean - 2 });
+    doc.text(data.classMeanTotalPoints != null ? fmt2(data.classMeanTotalPoints) : "—", rightX.pts, y + 5, { width: rightColW.pts - 2 });
+    doc.text(data.classMeanPoints != null ? fmt2(data.classMeanPoints) : "—", rightX.mpts, y + 5, { width: rightColW.mpts - 2 });
     y += avgRowHeight + 16;
 
     // Page 2, same document: overall grade distribution and subject mean/rank, both as
@@ -1447,7 +1450,7 @@ function drawSubjectRankTable(doc, { x, y, width, subjects, gradeOrder }) {
     doc.text(String(s.rank), colX.rank + 3, y + 4, { width: fixedW.rank - 3 });
     doc.text(s.subject, colX.subject + 3, y + 4, { width: fixedW.subject - 3 });
     doc.text(s.code || "—", colX.code + 3, y + 4, { width: fixedW.code - 3 });
-    doc.text(`${s.mean}%`, colX.mean + 3, y + 4, { width: fixedW.mean - 3 });
+    doc.text(`${fmt2(s.mean)}%`, colX.mean + 3, y + 4, { width: fixedW.mean - 3 });
     gradeOrder.forEach((g, i) => {
       doc.text(String(s.distribution[g] || 0), colX.gradesStart + i * gradeColW, y + 4, { width: gradeColW, align: "center" });
     });
@@ -1533,7 +1536,7 @@ router.get("/exam-analysis/:classRoomId/:examId/subjects-report/pdf", requireRol
       y = margin;
     }
     doc.fillColor(PDF_INK).fontSize(12).font("Helvetica-Bold").text(`#${s.rank}  ${s.subject}`, margin, y);
-    doc.fillColor(PDF_SLATE).fontSize(10).font("Helvetica").text(`Mean: ${s.mean}%`, margin + 350, y);
+    doc.fillColor(PDF_SLATE).fontSize(10).font("Helvetica").text(`Mean: ${fmt2(s.mean)}%`, margin + 350, y);
     y += 20;
 
     y = drawSubjectGenderDistributionTable(doc, { x: margin, y, width: pageWidth, subject: s });
@@ -1598,9 +1601,9 @@ router.get("/exam-analysis/:classRoomId/:examId/top10/pdf", requireRole("ADMIN",
     doc.text(s.admissionNo, col.adm, y + 8);
     doc.text(s.name, col.name, y + 8, { width: 160 });
     doc.text(String(s.totalScore), col.total, y + 8);
-    doc.text(s.meanScore != null ? `${s.meanScore}%` : "—", col.mean, y + 8);
+    doc.text(s.meanScore != null ? `${fmt2(s.meanScore)}%` : "—", col.mean, y + 8);
     doc.text(String(s.totalPoints), col.pts, y + 8);
-    doc.text(s.meanPoints != null ? String(s.meanPoints) : "—", col.mpts, y + 8);
+    doc.text(s.meanPoints != null ? fmt2(s.meanPoints) : "—", col.mpts, y + 8);
     y += rowHeight;
   });
 

@@ -157,11 +157,11 @@ router.get("/classrooms/:id/analysis", requireRole("ADMIN", "TEACHER"), async (r
   });
   const subjectAverages = Object.entries(bySubject).map(([subject, v]) => ({
     subject,
-    average: v.max ? Number(((v.total / v.max) * 100).toFixed(1)) : 0,
+    average: v.max ? Number(((v.total / v.max) * 100).toFixed(2)) : 0,
   }));
 
   const classOverallAverage = grades.length
-    ? Number(((grades.reduce((s, g) => s + g.score, 0) / grades.reduce((s, g) => s + g.maxScore, 0)) * 100).toFixed(1))
+    ? Number(((grades.reduce((s, g) => s + g.score, 0) / grades.reduce((s, g) => s + g.maxScore, 0)) * 100).toFixed(2))
     : null;
 
   // Per-student quick summary
@@ -177,7 +177,7 @@ router.get("/classrooms/:id/analysis", requireRole("ADMIN", "TEACHER"), async (r
       admissionNo: s.admissionNo,
       name: `${s.firstName} ${s.lastName}`,
       attendanceRate: sTotal ? Number(((sPresent / sTotal) * 100).toFixed(1)) : null,
-      average: sScoreMax ? Number(((sScoreTotal / sScoreMax) * 100).toFixed(1)) : null,
+      average: sScoreMax ? Number(((sScoreTotal / sScoreMax) * 100).toFixed(2)) : null,
     };
   });
 

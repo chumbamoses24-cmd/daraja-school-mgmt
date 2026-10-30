@@ -76,12 +76,12 @@ export default function StudentProfile() {
       });
       const averages = Object.values(byExam).map((e) => ({
         ...e,
-        average: e.max ? Number(((e.total / e.max) * 100).toFixed(1)) : 0,
+        average: e.max ? Number(((e.total / e.max) * 100).toFixed(2)) : 0,
       }));
       setExamAverages(averages);
       const grandTotal = grades.reduce((s, g) => s + g.score, 0);
       const grandMax = grades.reduce((s, g) => s + g.maxScore, 0);
-      setOverallAverage(grandMax ? Number(((grandTotal / grandMax) * 100).toFixed(1)) : null);
+      setOverallAverage(grandMax ? Number(((grandTotal / grandMax) * 100).toFixed(2)) : null);
     }).catch(() => {});
   }
   useEffect(load, [id]);
@@ -160,7 +160,7 @@ export default function StudentProfile() {
             <div>
               <p className="text-xs uppercase tracking-wider text-slate/50 font-mono mb-1">Overall average</p>
               <p className="text-2xl font-display font-semibold text-ink">
-                {overallAverage != null ? `${overallAverage}%` : "—"}
+                {overallAverage != null ? `${overallAverage.toFixed(2)}%` : "—"}
               </p>
             </div>
           </div>
@@ -173,7 +173,7 @@ export default function StudentProfile() {
                   <div className="flex-1 h-2 bg-line/30 rounded-full overflow-hidden">
                     <div className="h-full bg-ink rounded-full" style={{ width: `${e.average}%` }} />
                   </div>
-                  <span className="text-sm font-mono w-12 text-right">{e.average}%</span>
+                  <span className="text-sm font-mono w-16 text-right">{e.average.toFixed(2)}%</span>
                 </div>
               ))}
             </div>

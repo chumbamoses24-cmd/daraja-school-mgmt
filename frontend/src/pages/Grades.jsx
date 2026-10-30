@@ -1104,7 +1104,7 @@ export default function Grades() {
               </div>
               <div className="text-right">
                 <p className="text-xs uppercase tracking-wider text-slate/50 font-mono">Overall</p>
-                <p className="text-3xl font-display font-semibold text-ink mb-2">{reportCard.average}% · {reportCard.overallGrade}</p>
+                <p className="text-3xl font-display font-semibold text-ink mb-2">{Number(reportCard.average).toFixed(2)}% · {reportCard.overallGrade}</p>
                 <button className="btn-secondary text-sm" onClick={downloadReportCardPdf}>
                   Download PDF
                 </button>
@@ -1113,7 +1113,7 @@ export default function Grades() {
             {reportCard.previousComparison && (
               <div className="flex items-center justify-between text-sm bg-paper border border-line rounded-lg px-4 py-2 mb-4">
                 <span className="text-slate/70">
-                  vs. {reportCard.previousComparison.examLabel}: {reportCard.previousComparison.meanScore ?? "—"}%
+                  vs. {reportCard.previousComparison.examLabel}: {reportCard.previousComparison.meanScore != null ? Number(reportCard.previousComparison.meanScore).toFixed(2) : "—"}%
                   {reportCard.previousComparison.position
                     ? ` · was ${reportCard.previousComparison.position}/${reportCard.previousComparison.classSize}`
                     : ""}
